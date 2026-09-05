@@ -1,0 +1,245 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Tenant {
+  id          String       @id @default(uuid()) @db.Uuid
+  name        String       @db.VarChar(200)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  memberships Membership[]
+  roles       Role[]
+  auditEvents AuditEvent[]
+  orgUnits    OrgUnit[]
+  workshops   Workshop[]
+  productions Production[]
+
+  @@map("tenants")
+}
+
+model User {
+  id                 String              @id @default(uuid()) @db.Uuid
+  email              String              @unique @db.VarChar(320)
+  displayName        String              @db.VarChar(200)
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  memberships        Membership[]
+  passwordCredential PasswordCredential?
+
+  @@map("users")
+}
+
+model Membership {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  userId      String           @map("user_id") @db.Uuid
+  roleId      String?          @map("role_id") @db.Uuid
+  status      MembershipStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  user        User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  role        Role?            @relation("MembershipRole", fields: [tenantId, roleId], references: [tenantId, id], onDelete: Restrict)
+  auditEvents AuditEvent[]
+  authSessions AuthSession[]
+  managedOrgUnits OrgUnit[] @relation("OrgUnitManager")
+  managedWorkshops Workshop[] @relation("WorkshopManager")
+  producedProductions Production[] @relation("ProductionProducer")
+  employeeProfiles EmployeeProfile[]
+  productionHealthEvents ProductionHealthEvent[]
+
+  @@unique([tenantId, userId])
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("memberships")
+}
+
+model OrgUnit {
+  id                  String       @id @default(uuid()) @db.Uuid
+  tenantId            String       @map("tenant_id") @db.Uuid
+  parentId            String?      @map("parent_id") @db.Uuid
+  managerMembershipId String?      @map("manager_membership_id") @db.Uuid
+  name                String       @db.VarChar(200)
+  type                String       @db.VarChar(100)
+  isActive            Boolean      @default(true) @map("is_active")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+  tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  parent              OrgUnit?     @relation("OrgUnitParent", fields: [tenantId, parentId], references: [tenantId, id], onDelete: Restrict)
+  children            OrgUnit[]    @relation("OrgUnitParent")
+  manager             Membership?  @relation("OrgUnitManager", fields: [tenantId, managerMembershipId], references: [tenantId, id], onDelete: Restrict)
+  workshops           Workshop[]
+  employeeAssignments EmployeeProfileOrgUnit[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, parentId])
+  @@index([tenantId, isActive])
+  @@map("org_units")
+}
+
+model EmployeeProfile {
+  id           String       @id @default(uuid()) @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  membershipId String       @map("membership_id") @db.Uuid
+  title        String       @db.VarChar(200)
+  isArtist     Boolean      @default(false) @map("is_artist")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  membership   Membership   @relation(fields: [tenantId, membershipId], references: [tenantId, id], onDelete: Restrict)
+  orgUnits     EmployeeProfileOrgUnit[]
+
+  @@unique([tenantId, membershipId])
+  @@unique([tenantId, id])
+  @@map("employee_profiles")
+}
+
+model EmployeeProfileOrgUnit {
+  tenantId          String          @map("tenant_id") @db.Uuid
+  employeeProfileId String          @map("employee_profile_id") @db.Uuid
+  orgUnitId         String          @map("org_unit_id") @db.Uuid
+  employeeProfile   EmployeeProfile @relation(fields: [tenantId, employeeProfileId], references: [tenantId, id], onDelete: Restrict)
+  orgUnit           OrgUnit         @relation(fields: [tenantId, orgUnitId], references: [tenantId, id], onDelete: Restrict)
+
+  @@id([tenantId, employeeProfileId, orgUnitId])
+  @@index([tenantId, orgUnitId])
+  @@map("employee_profile_org_units")
+}
+
+model Workshop {
+  id                  String       @id @default(uuid()) @db.Uuid
+  tenantId            String       @map("tenant_id") @db.Uuid
+  orgUnitId           String?      @map("org_unit_id") @db.Uuid
+  managerMembershipId String?      @map("manager_membership_id") @db.Uuid
+  name                String       @db.VarChar(200)
+  isActive            Boolean      @default(true) @map("is_active")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+  tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  orgUnit             OrgUnit?     @relation(fields: [tenantId, orgUnitId], references: [tenantId, id], onDelete: Restrict)
+  manager             Membership?  @relation("WorkshopManager", fields: [tenantId, managerMembershipId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@index([tenantId, isActive])
+  @@map("workshops")
+}
+
+model Production {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  tenantId             String                  @map("tenant_id") @db.Uuid
+  title                String                  @db.VarChar(300)
+  status               String                  @db.VarChar(100)
+  premiereDate         DateTime?               @map("premiere_date") @db.Date
+  producerMembershipId String?                 @map("producer_membership_id") @db.Uuid
+  healthStatus         String                  @map("health_status") @db.VarChar(100)
+  healthReason         String?                 @map("health_reason") @db.VarChar(1000)
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  producer             Membership?             @relation("ProductionProducer", fields: [tenantId, producerMembershipId], references: [tenantId, id], onDelete: Restrict)
+  healthEvents         ProductionHealthEvent[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@index([tenantId, premiereDate])
+  @@map("productions")
+}
+
+model ProductionHealthEvent {
+  id                  String     @id @default(uuid()) @db.Uuid
+  tenantId            String     @map("tenant_id") @db.Uuid
+  productionId        String     @map("production_id") @db.Uuid
+  actorMembershipId   String     @map("actor_membership_id") @db.Uuid
+  healthStatus        String     @map("health_status") @db.VarChar(100)
+  reason              String?    @db.VarChar(1000)
+  occurredAt          DateTime   @default(now()) @map("occurred_at")
+  production          Production @relation(fields: [tenantId, productionId], references: [tenantId, id], onDelete: Restrict)
+  actorMembership     Membership @relation(fields: [tenantId, actorMembershipId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, productionId, occurredAt])
+  @@map("production_health_events")
+}
+
+model PasswordCredential {
+  userId       String   @id @map("user_id") @db.Uuid
+  passwordHash String   @map("password_hash") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("password_credentials")
+}
+
+model AuthSession {
+  id           String     @id @default(uuid()) @db.Uuid
+  tokenHash    String     @unique @map("token_hash") @db.Char(64)
+  membershipId String     @map("membership_id") @db.Uuid
+  expiresAt    DateTime   @map("expires_at")
+  revokedAt    DateTime?  @map("revoked_at")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Restrict)
+
+  @@index([membershipId, expiresAt])
+  @@map("auth_sessions")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  name        String           @db.VarChar(100)
+  createdAt   DateTime         @default(now()) @map("created_at")
+  updatedAt   DateTime         @updatedAt @map("updated_at")
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  memberships Membership[]     @relation("MembershipRole")
+  permissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@unique([tenantId, id])
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(150)
+  description String           @db.VarChar(500)
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AuditEvent {
+  id                  String     @id @default(uuid()) @db.Uuid
+  tenantId            String     @map("tenant_id") @db.Uuid
+  actorMembershipId   String     @map("actor_membership_id") @db.Uuid
+  action              String     @db.VarChar(150)
+  subjectType         String     @map("subject_type") @db.VarChar(100)
+  subjectId           String     @map("subject_id") @db.Uuid
+  changes             Json       @default("{}")
+  occurredAt          DateTime   @default(now()) @map("occurred_at")
+  tenant              Tenant     @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actorMembership     Membership @relation(fields: [tenantId, actorMembershipId], references: [tenantId, id], onDelete: Restrict)
+
+  @@index([tenantId, subjectType, subjectId, occurredAt])
+  @@index([tenantId, occurredAt])
+  @@map("audit_events")
+}

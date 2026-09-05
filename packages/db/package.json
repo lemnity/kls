@@ -1,0 +1,30 @@
+{
+  "name": "@europa/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./permission-resolver": {
+      "types": "./dist/postgres-permission-resolver.d.ts",
+      "default": "./dist/postgres-permission-resolver.js"
+    },
+    "./role-repository": {
+      "types": "./dist/postgres-role-repository.d.ts",
+      "default": "./dist/postgres-role-repository.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "generate": "node ../../node_modules/prisma/build/index.js generate --config prisma.config.ts",
+    "validate": "node ../../node_modules/prisma/build/index.js validate --config prisma.config.ts",
+    "migrate:dev": "node ../../node_modules/prisma/build/index.js migrate dev --config prisma.config.ts",
+    "migrate:deploy": "node ../../node_modules/prisma/build/index.js migrate deploy --config prisma.config.ts",
+    "migrate:status": "node ../../node_modules/prisma/build/index.js migrate status --config prisma.config.ts",
+    "test:integration": "vitest run --root ../.. packages/db/src/tenant-integrity.integration.test.ts packages/db/src/demo-seed.integration.test.ts packages/db/src/auth-schema.integration.test.ts packages/db/src/postgres-permission-resolver.integration.test.ts packages/db/src/postgres-role-repository.integration.test.ts packages/db/src/organization-production-schema.integration.test.ts",
+    "seed:demo": "tsx src/seed-demo.ts"
+  },
+  "dependencies": {
+    "@europa/domain": "file:../domain",
+    "pg": "8.23.0"
+  }
+}

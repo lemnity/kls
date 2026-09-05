@@ -1,0 +1,22 @@
+{
+  "name": "@europa/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./local-session": {
+      "types": "./dist/local-session.d.ts",
+      "default": "./dist/local-session.js"
+    },
+    "./password": {
+      "types": "./dist/password.d.ts",
+      "default": "./dist/password.js"
+    }
+  },
+  "dependencies": {
+    "@europa/domain": "file:../domain"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

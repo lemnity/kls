@@ -1,0 +1,23 @@
+{
+  "name": "@europa/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./tenant-context": {
+      "types": "./dist/tenant-context.d.ts",
+      "default": "./dist/tenant-context.js"
+    },
+    "./audit-event": {
+      "types": "./dist/audit-event.d.ts",
+      "default": "./dist/audit-event.js"
+    },
+    "./permission-authorizer": {
+      "types": "./dist/permission-authorizer.d.ts",
+      "default": "./dist/permission-authorizer.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@europa/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "npm run build --workspace @europa/domain && npm run build --workspace @europa/config && npm run build --workspace @europa/auth && npm run build --workspace @europa/db",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "start:dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@europa/auth": "file:../../packages/auth",
+    "@europa/config": "file:../../packages/config",
+    "@europa/db": "file:../../packages/db",
+    "@europa/domain": "file:../../packages/domain",
+    "pg": "8.23.0"
+  }
+}

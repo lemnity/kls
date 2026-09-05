@@ -1,0 +1,15 @@
+# Open Questions
+- Exact role and approval matrix?
+- Exact production stage list? Until it is approved, `productions.status` accepts a non-empty code rather than an invented enum.
+- Exact health indicator algorithm? Until it is approved, `productions.health_status` and history events accept non-empty codes rather than an invented enum.
+- Exact contract/act/accounting statuses?
+- Definition of final actual production cost?
+- Mandatory fields for each budget version?
+- Do artists need login?
+- How are leave/sick periods entered?
+- Server OS/spec, internet, mail relay, domain/TLS?
+- RPO/RTO and backup storage?
+- AD/LDAP/SSO?
+- Для пилота выбран local email/password; остаётся утвердить controlled initial-admin provisioning flow, final session lifetime/revocation policy и MFA policy.
+- Retention and personal data rules?
+- Max file/video size?

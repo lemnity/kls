@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: europa
+          POSTGRES_USER: europa
+          POSTGRES_PASSWORD: europa_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U europa -d europa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://europa:europa_ci_only@localhost:5432/europa?schema=public
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run validate --workspace @europa/db
+      - run: npm run migrate:deploy --workspace @europa/db
+      - run: npm test
+      - run: npm run test:integration --workspace @europa/db
+      - run: npm run typecheck
+      - run: npm run build
