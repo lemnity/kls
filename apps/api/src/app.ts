@@ -39,6 +39,7 @@ import {
   MembershipAlreadyExistsError,
   MembershipRoleNotFoundError,
   MembershipUserNotFoundError,
+  type MembershipListItem,
   type StoredMembership,
 } from '@kulisa/db/membership-repository';
 import {
@@ -64,6 +65,8 @@ import {
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
+  WorkshopTaskClosedError,
+  WorkshopTaskInvalidTransitionError,
   type CreateTaskFromBudgetItemInput,
   type StoredWorkshopTask,
 } from '@kulisa/db/workshop-task-repository';
@@ -133,6 +136,7 @@ export interface MembershipRepository {
     context: TenantContext,
     membershipId: string,
   ): Promise<StoredMembership | null>;
+  listMemberships(context: TenantContext): Promise<MembershipListItem[]>;
 }
 
 export interface ProductionRepository {
@@ -164,6 +168,16 @@ export interface WorkshopTaskRepository {
     input: CreateTaskFromBudgetItemInput,
   ): Promise<StoredWorkshopTask>;
   listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]>;
+  assignTask(context: TenantContext, taskId: string, assigneeMembershipId: string): Promise<StoredWorkshopTask | null>;
+  acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
+  completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
+  closeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
+  rescheduleTaskDeadline(
+    context: TenantContext,
+    taskId: string,
+    newDeadlineAt: string | null,
+    reason: string,
+  ): Promise<StoredWorkshopTask | null>;
 }
 
 const READINESS_PROBES = Symbol('READINESS_PROBES');
@@ -445,6 +459,136 @@ class HealthController {
     return this.workshopTaskRepository.listTasksByWorkshop(context, workshopId);
   }
 
+  @Patch('v1/workshop-tasks/:taskId/assign')
+  public async assignWorkshopTask(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('taskId') taskId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTask> {
+    const assigneeMembershipId = readAssigneeMembershipId(body);
+    if (!assigneeMembershipId) throw new BadRequestException('Invalid task payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.assignTask(context, taskId, assigneeMembershipId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/accept')
+  @HttpCode(HttpStatus.OK)
+  public async acceptWorkshopTask(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('taskId') taskId: string,
+  ): Promise<StoredWorkshopTask> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.acceptTask(context, taskId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/complete')
+  @HttpCode(HttpStatus.OK)
+  public async completeWorkshopTask(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('taskId') taskId: string,
+  ): Promise<StoredWorkshopTask> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.completeTask(context, taskId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/close')
+  @HttpCode(HttpStatus.OK)
+  public async closeWorkshopTask(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('taskId') taskId: string,
+  ): Promise<StoredWorkshopTask> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.closeTask(context, taskId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Patch('v1/workshop-tasks/:taskId/deadline')
+  public async rescheduleWorkshopTaskDeadline(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('taskId') taskId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTask> {
+    const input = readRescheduleInput(body);
+    if (!input) throw new BadRequestException('Invalid reschedule payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.rescheduleTaskDeadline(
+        context,
+        taskId,
+        input.deadlineAt,
+        input.reason,
+      );
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  private mapTaskTransitionError(error: unknown): Error {
+    if (error instanceof WorkshopTaskInvalidTransitionError) {
+      return new ConflictException('Task is not in the expected status for this transition');
+    }
+    if (error instanceof WorkshopTaskAssigneeNotFoundError) {
+      return new BadRequestException('Assignee not found in tenant');
+    }
+    if (error instanceof WorkshopTaskClosedError) {
+      return new ConflictException('Task is closed and cannot be modified');
+    }
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   @Post('v1/organization/memberships')
   public async createMembership(
     @Headers('authorization') authorization: string | undefined,
@@ -486,6 +630,17 @@ class HealthController {
     const membership = await this.membershipRepository.deactivateMembership(context, membershipId);
     if (!membership) throw new NotFoundException();
     return membership;
+  }
+
+  @Get('v1/organization/memberships')
+  public async listMemberships(
+    @Headers('authorization') authorization: string | undefined,
+  ): Promise<MembershipListItem[]> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.membershipRepository) {
+      throw new ServiceUnavailableException('Membership service is not configured');
+    }
+    return this.membershipRepository.listMemberships(context);
   }
 
   @Post('v1/productions')
@@ -841,6 +996,25 @@ function readCreateTaskInput(body: unknown): {
     ...(assigneeMembershipId ? { assigneeMembershipId } : {}),
     ...(deadlineAt ? { deadlineAt } : {}),
   };
+}
+
+function readAssigneeMembershipId(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  return readOptionalUuid((body as Record<string, unknown>).assigneeMembershipId) ?? null;
+}
+
+function readRescheduleInput(body: unknown): { deadlineAt: string | null; reason: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  if (!('deadlineAt' in input)) return null;
+
+  const deadlineAt = readNullableIsoDate(input.deadlineAt);
+  if (deadlineAt === 'invalid') return null;
+
+  const reason = normalizeString(input.reason, 500);
+  if (!reason) return null;
+
+  return { deadlineAt, reason };
 }
 
 function readMembershipInput(

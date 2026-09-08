@@ -944,3 +944,128 @@ a.rail-icon {
     grid-template-columns: 1fr;
   }
 }
+
+/* -------------------------------------------------------------------- */
+/* Workshops list                                                       */
+/* -------------------------------------------------------------------- */
+
+.workshop-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.workshop-card h2 {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.status-pill--muted {
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+}
+
+/* -------------------------------------------------------------------- */
+/* Task board (workshop detail)                                         */
+/* -------------------------------------------------------------------- */
+
+.task-board {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-row {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 16px;
+}
+
+.task-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.task-row__main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 220px;
+}
+
+.task-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-row__description {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.task-row__meta {
+  font-size: 0.8rem;
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-pill--new {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-dark);
+}
+
+.status-pill--assigned,
+.status-pill--accepted {
+  background: #fff2d9;
+  color: #9a6300;
+}
+
+.status-pill--completed {
+  background: #e3f5e6;
+  color: #1e7a34;
+}
+
+.status-pill--closed {
+  background: var(--color-bg);
+  color: var(--color-text-soft);
+}
+
+.assign-form,
+.reschedule-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.assign-form select,
+.reschedule-form input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: 8px 10px;
+  font-size: 0.85rem;
+}
+
+.reschedule-form {
+  width: 100%;
+  padding-top: 10px;
+}
+
+.task-row__error {
+  width: 100%;
+  color: var(--color-danger);
+  font-size: 0.82rem;
+}

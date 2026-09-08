@@ -10,6 +10,8 @@ import {
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
+  WorkshopTaskClosedError,
+  WorkshopTaskInvalidTransitionError,
 } from './postgres-workshop-task-repository.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -201,7 +203,162 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
     expect(listA).toHaveLength(2);
     expect(listB).toEqual([]);
   });
+
+  it('walks a task through the full lifecycle: assign -> accept -> complete -> close', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    const assigned = await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
+    expect(assigned).toMatchObject({ status: 'assigned', assigneeMembershipId: tenant.context.membershipId });
+
+    const accepted = await taskRepository.acceptTask(tenant.context, task.id);
+    expect(accepted).toMatchObject({ status: 'accepted' });
+
+    const completed = await taskRepository.completeTask(tenant.context, task.id);
+    expect(completed).toMatchObject({ status: 'completed' });
+    expect(completed!.completedAt).not.toBeNull();
+
+    const closed = await taskRepository.closeTask(tenant.context, task.id);
+    expect(closed).toMatchObject({ status: 'closed' });
+
+    await expect(
+      client.query("SELECT action FROM audit_events WHERE subject_id = $1 AND action LIKE 'workshop_task.%' ORDER BY action", [task.id]),
+    ).resolves.toMatchObject({
+      rows: [
+        { action: 'workshop_task.accepted' },
+        { action: 'workshop_task.assigned' },
+        { action: 'workshop_task.closed' },
+        { action: 'workshop_task.completed' },
+        { action: 'workshop_task.created' },
+      ],
+    });
+  });
+
+  it('rejects assigning a task that is not new', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+    await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
+
+    await expect(
+      taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId),
+    ).rejects.toBeInstanceOf(WorkshopTaskInvalidTransitionError);
+  });
+
+  it('rejects accepting a task that has not been assigned', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    await expect(taskRepository.acceptTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskInvalidTransitionError);
+  });
+
+  it('rejects assigning to a nonexistent membership', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    await expect(
+      taskRepository.assignTask(tenant.context, task.id, randomUUID()),
+    ).rejects.toBeInstanceOf(WorkshopTaskAssigneeNotFoundError);
+  });
+
+  it('returns null when transitioning a task outside the tenant', async () => {
+    const tenantA = await createTenantFixture(client, 'Tenant A');
+    const tenantB = await createTenantFixture(client, 'Tenant B');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenantB);
+
+    await expect(
+      taskRepository.assignTask(tenantA.context, task.id, tenantA.context.membershipId),
+    ).resolves.toBeNull();
+  });
+
+  it('reschedules a task deadline and records one TaskDeadlineChange plus audit event', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    const rescheduled = await taskRepository.rescheduleTaskDeadline(
+      tenant.context,
+      task.id,
+      '2026-12-24',
+      'Поставщик задержал ткань',
+    );
+
+    expect(rescheduled).toMatchObject({ id: task.id, deadlineAt: '2026-12-24T00:00:00Z' });
+    await expect(
+      client.query(
+        'SELECT old_deadline_at, new_deadline_at, reason, actor_membership_id FROM task_deadline_changes WHERE workshop_task_id = $1',
+        [task.id],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{
+        old_deadline_at: null,
+        reason: 'Поставщик задержал ткань',
+        actor_membership_id: tenant.context.membershipId,
+      }],
+    });
+    await expect(
+      client.query("SELECT count(*)::int AS count FROM audit_events WHERE action = 'workshop_task.deadline_changed' AND subject_id = $1", [task.id]),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('can clear a deadline by rescheduling to null', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+    await taskRepository.rescheduleTaskDeadline(tenant.context, task.id, '2026-12-24', 'Initial deadline');
+
+    const cleared = await taskRepository.rescheduleTaskDeadline(tenant.context, task.id, null, 'Дедлайн больше не актуален');
+
+    expect(cleared).toMatchObject({ deadlineAt: null });
+  });
+
+  it('rejects rescheduling a closed task', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+    await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
+    await taskRepository.acceptTask(tenant.context, task.id);
+    await taskRepository.completeTask(tenant.context, task.id);
+    await taskRepository.closeTask(tenant.context, task.id);
+
+    await expect(
+      taskRepository.rescheduleTaskDeadline(tenant.context, task.id, '2026-12-24', 'Слишком поздно'),
+    ).rejects.toBeInstanceOf(WorkshopTaskClosedError);
+  });
+
+  it('returns null when rescheduling a task outside the tenant', async () => {
+    const tenantA = await createTenantFixture(client, 'Tenant A');
+    const tenantB = await createTenantFixture(client, 'Tenant B');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenantB);
+
+    await expect(
+      taskRepository.rescheduleTaskDeadline(tenantA.context, task.id, '2026-12-24', 'Причина'),
+    ).resolves.toBeNull();
+  });
 });
+
+async function createReadyTask(
+  client: Client,
+  tenant: Awaited<ReturnType<typeof createTenantFixture>>,
+) {
+  const budgetRepository = new PostgresBudgetRepository(client);
+  const taskRepository = new PostgresWorkshopTaskRepository(client);
+  const budget = await budgetRepository.createBudget(tenant.context, {
+    productionId: tenant.productionId,
+    sections: [{
+      workshopId: tenant.workshopId,
+      title: 'Пошивочный цех',
+      items: [{ description: 'Сшить костюм', quantity: '1', unit: 'шт', unitPrice: '5000.00' }],
+    }],
+  });
+  await budgetRepository.approveBudget(tenant.context, budget.id);
+  return taskRepository.createTaskFromBudgetItem(tenant.context, { budgetItemId: budget.sections[0]!.items[0]!.id });
+}
 
 async function createTenantFixture(client: Client, name: string) {
   const tenantId = randomUUID();

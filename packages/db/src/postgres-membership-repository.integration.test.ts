@@ -134,6 +134,20 @@ describeIntegration('PostgresMembershipRepository', () => {
 
     await expect(repository.deactivateMembership(tenant.context, membership.id)).resolves.toBeNull();
   });
+
+  it('lists memberships scoped to the tenant with user email, ordered by email', async () => {
+    const tenantA = await createTenantAdmin(client, 'Tenant A');
+    const tenantB = await createTenantAdmin(client, 'Tenant B');
+    const repository = new PostgresMembershipRepository(client);
+    const bUserId = await createUser(client, 'aaa-first');
+    await repository.createMembership(tenantB.context, { userId: bUserId });
+
+    const listA = await repository.listMemberships(tenantA.context);
+
+    expect(listA).toHaveLength(1);
+    expect(listA[0]).toMatchObject({ id: tenantA.membershipId, userId: tenantA.context.userId, status: 'ACTIVE' });
+    expect(listA[0]!.userEmail).toContain('@example.test');
+  });
 });
 
 async function createUser(client: Client, label: string): Promise<string> {

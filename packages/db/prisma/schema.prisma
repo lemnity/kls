@@ -25,6 +25,7 @@ model Tenant {
   productions Production[]
   budgets     Budget[]
   workshopTasks WorkshopTask[]
+  taskDeadlineChanges TaskDeadlineChange[]
 
   @@map("tenants")
 }
@@ -61,6 +62,7 @@ model Membership {
   productionHealthEvents ProductionHealthEvent[]
   createdBudgetVersions BudgetVersion[] @relation("BudgetVersionCreatedBy")
   assignedWorkshopTasks WorkshopTask[] @relation("WorkshopTaskAssignee")
+  deadlineChangeActions TaskDeadlineChange[] @relation("TaskDeadlineChangeActor")
 
   @@unique([tenantId, userId])
   @@unique([tenantId, id])
@@ -253,6 +255,7 @@ model WorkshopTask {
   production           Production  @relation(fields: [tenantId, productionId], references: [tenantId, id], onDelete: Restrict)
   workshop             Workshop    @relation(fields: [tenantId, workshopId], references: [tenantId, id], onDelete: Restrict)
   assignee             Membership? @relation("WorkshopTaskAssignee", fields: [tenantId, assigneeMembershipId], references: [tenantId, id], onDelete: Restrict)
+  deadlineChanges      TaskDeadlineChange[]
 
   @@unique([tenantId, id])
   @@unique([tenantId, budgetItemId])
@@ -260,6 +263,24 @@ model WorkshopTask {
   @@index([tenantId, workshopId])
   @@index([tenantId, status])
   @@map("workshop_tasks")
+}
+
+model TaskDeadlineChange {
+  id                  String       @id @default(uuid()) @db.Uuid
+  tenantId            String       @map("tenant_id") @db.Uuid
+  workshopTaskId      String       @map("workshop_task_id") @db.Uuid
+  oldDeadlineAt       DateTime?    @map("old_deadline_at")
+  newDeadlineAt       DateTime?    @map("new_deadline_at")
+  reason              String       @db.VarChar(500)
+  actorMembershipId   String       @map("actor_membership_id") @db.Uuid
+  createdAt           DateTime     @default(now()) @map("created_at")
+  tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  workshopTask        WorkshopTask @relation(fields: [tenantId, workshopTaskId], references: [tenantId, id], onDelete: Restrict)
+  actorMembership     Membership   @relation("TaskDeadlineChangeActor", fields: [tenantId, actorMembershipId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, workshopTaskId])
+  @@map("task_deadline_changes")
 }
 
 model ProductionHealthEvent {
