@@ -99,14 +99,14 @@
 - [ ] Реализовать таблицы `Tenant`, `User`, `Membership`, `Role`, `Permission`, `AuditEvent`; создать demo tenant с синтетическими пользователями и без данных ТБДТ.
 - [ ] Реализовать аудит через транзакционную запись: business mutation и `AuditEvent` должны commit/rollback вместе.
 - [ ] Написать integration tests: member tenant A читает свой объект; тот же user без membership не читает tenant B; admin tenant B не читает tenant A; forged `tenantId` не влияет на результат.
-- [ ] Проверить migration на чистом PostgreSQL, применить rollback procedure на копии базы и зафиксировать команды в `docs/OPERATIONS.md`.
+- [x] Проверить migration на чистом PostgreSQL, применить rollback procedure на копии базы и зафиксировать команды в `docs/OPERATIONS.md` (раздел «Migrations»): все 6 текущих migration применены на чистой scratch-БД, dump seeded staging-copy восстановлен после симулированного `DROP DATABASE` за 3.2 сек с полным совпадением counts и identity-данных.
 
 ### Приёмка
 
 - [x] `docker compose up` поднимает все зависимости и healthchecks становятся healthy.
-- [ ] Пользователь demo tenant входит, видит responsive shell и не может открыть данные другого tenant.
-- [ ] Mutation создаёт один business audit event; failed mutation не создаёт «успешный» audit event.
-- [ ] CI выполняет lint, typecheck, unit и integration tests на чистой БД.
+- [x] Пользователь demo tenant входит, видит responsive shell и не может открыть данные другого tenant: проверено реальным браузером (headless Chromium) через реальный веб + API + свежемигрированный Postgres — логин `demo@demo.ru`/`demo` через настоящую `/api/session` → `/v1/auth/login`, дашборд рендерится на desktop (1280px) и mobile (390px) вьюпортах, обращение к несуществующему/чужому id постановки показывает «Постановка не найдена» без утечки данных.
+- [x] Mutation создаёт один business audit event; failed mutation не создаёт «успешный» audit event: подтверждено полным прогоном тестов (175/175, включая ранее пропускавшиеся integration/E2E) на чистой свежемигрированной Postgres — паттерн везде один (mutation + audit INSERT в одном атомарном CTE-запросе, `FROM created`/`FROM updated`, ноль строк при неуспехе → ноль audit-событий), явно проверено в org-unit/workshop-task/budget integration-тестах и в workshop-task-workflow E2E (6 audit-событий на полный жизненный цикл задачи).
+- [ ] CI выполняет lint, typecheck, unit и integration tests на чистой БД. Подтверждено: typecheck/unit/test:integration реально проходят на чистой БД (`.github/workflows/ci.yml` поднимает Postgres service, дополнительно перепроверено локально — все 175 тестов и `npm run build` проходят на свежемигрированной scratch-БД). Не подтверждено и фактически отсутствует: lint — в `ci.yml` нет шага `npm run lint`, а ESLint вообще не установлен и не сконфигурирован в репозитории (см. связанный пункт repository scope ниже).
 
 ## 4. Инкремент 1 — пользователи, оргструктура и постановки
 
