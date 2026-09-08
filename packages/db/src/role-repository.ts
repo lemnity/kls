@@ -1,4 +1,4 @@
-import type { TenantContext } from '@europa/domain/tenant-context';
+import type { TenantContext } from '@kulisa/domain/tenant-context';
 
 export interface RolePrismaClient {
   role: {

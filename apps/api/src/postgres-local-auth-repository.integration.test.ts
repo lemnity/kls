@@ -3,8 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { LocalPasswordAuthService } from '@europa/auth/local-session';
-import { hashPassword } from '@europa/auth/password';
+import { LocalPasswordAuthService } from '@kulisa/auth/local-session';
+import { hashPassword } from '@kulisa/auth/password';
 
 import { PostgresLocalAuthRepository } from './postgres-local-auth-repository.js';
 

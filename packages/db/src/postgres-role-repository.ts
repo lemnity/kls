@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { TenantContext } from '@europa/domain/tenant-context';
+import type { TenantContext } from '@kulisa/domain/tenant-context';
 import type { Client } from 'pg';
 
 type SqlClient = Pick<Client, 'query'>;

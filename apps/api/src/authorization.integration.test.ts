@@ -1,9 +1,9 @@
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { LocalPasswordAuthService } from '@europa/auth/local-session';
-import { hashPassword } from '@europa/auth/password';
-import { PostgresPermissionResolver } from '@europa/db/permission-resolver';
+import { LocalPasswordAuthService } from '@kulisa/auth/local-session';
+import { hashPassword } from '@kulisa/auth/password';
+import { PostgresPermissionResolver } from '@kulisa/db/permission-resolver';
 
 import { createApiApp } from './app.js';
 import { PostgresLocalAuthRepository } from './postgres-local-auth-repository.js';

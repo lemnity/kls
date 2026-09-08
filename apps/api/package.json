@@ -1,19 +1,19 @@
 {
-  "name": "@europa/api",
+  "name": "@kulisa/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "prebuild": "npm run build --workspace @europa/domain && npm run build --workspace @europa/config && npm run build --workspace @europa/auth && npm run build --workspace @europa/db",
+    "prebuild": "npm run build --workspace @kulisa/domain && npm run build --workspace @kulisa/config && npm run build --workspace @kulisa/auth && npm run build --workspace @kulisa/db",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:dev": "tsx watch src/main.ts"
   },
   "dependencies": {
-    "@europa/auth": "file:../../packages/auth",
-    "@europa/config": "file:../../packages/config",
-    "@europa/db": "file:../../packages/db",
-    "@europa/domain": "file:../../packages/domain",
+    "@kulisa/auth": "file:../../packages/auth",
+    "@kulisa/config": "file:../../packages/config",
+    "@kulisa/db": "file:../../packages/db",
+    "@kulisa/domain": "file:../../packages/domain",
     "pg": "8.23.0"
   }
 }

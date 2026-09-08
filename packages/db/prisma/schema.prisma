@@ -23,6 +23,8 @@ model Tenant {
   orgUnits    OrgUnit[]
   workshops   Workshop[]
   productions Production[]
+  budgets     Budget[]
+  workshopTasks WorkshopTask[]
 
   @@map("tenants")
 }
@@ -57,6 +59,8 @@ model Membership {
   producedProductions Production[] @relation("ProductionProducer")
   employeeProfiles EmployeeProfile[]
   productionHealthEvents ProductionHealthEvent[]
+  createdBudgetVersions BudgetVersion[] @relation("BudgetVersionCreatedBy")
+  assignedWorkshopTasks WorkshopTask[] @relation("WorkshopTaskAssignee")
 
   @@unique([tenantId, userId])
   @@unique([tenantId, id])
@@ -127,6 +131,8 @@ model Workshop {
   tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   orgUnit             OrgUnit?     @relation(fields: [tenantId, orgUnitId], references: [tenantId, id], onDelete: Restrict)
   manager             Membership?  @relation("WorkshopManager", fields: [tenantId, managerMembershipId], references: [tenantId, id], onDelete: Restrict)
+  budgetSections      BudgetSection[]
+  workshopTasks       WorkshopTask[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
@@ -148,11 +154,112 @@ model Production {
   tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   producer             Membership?             @relation("ProductionProducer", fields: [tenantId, producerMembershipId], references: [tenantId, id], onDelete: Restrict)
   healthEvents         ProductionHealthEvent[]
+  budget               Budget?
+  workshopTasks        WorkshopTask[]
 
   @@unique([tenantId, id])
   @@index([tenantId, status])
   @@index([tenantId, premiereDate])
   @@map("productions")
+}
+
+enum BudgetStatus {
+  PRELIMINARY
+  DETAILED
+  APPROVED
+}
+
+model Budget {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @map("tenant_id") @db.Uuid
+  productionId String        @map("production_id") @db.Uuid
+  status       BudgetStatus  @default(PRELIMINARY)
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  production   Production    @relation(fields: [tenantId, productionId], references: [tenantId, id], onDelete: Restrict)
+  versions     BudgetVersion[]
+
+  @@unique([tenantId, productionId])
+  @@unique([tenantId, id])
+  @@map("budgets")
+}
+
+model BudgetVersion {
+  id                    String          @id @default(uuid()) @db.Uuid
+  tenantId              String          @map("tenant_id") @db.Uuid
+  budgetId              String          @map("budget_id") @db.Uuid
+  revision              Int
+  createdAt             DateTime        @default(now()) @map("created_at")
+  createdByMembershipId String          @map("created_by_membership_id") @db.Uuid
+  budget                Budget          @relation(fields: [tenantId, budgetId], references: [tenantId, id], onDelete: Restrict)
+  createdBy             Membership      @relation("BudgetVersionCreatedBy", fields: [tenantId, createdByMembershipId], references: [tenantId, id], onDelete: Restrict)
+  sections              BudgetSection[]
+
+  @@unique([tenantId, budgetId, revision])
+  @@unique([tenantId, id])
+  @@map("budget_versions")
+}
+
+model BudgetSection {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  budgetVersionId String        @map("budget_version_id") @db.Uuid
+  workshopId      String        @map("workshop_id") @db.Uuid
+  title           String        @db.VarChar(200)
+  position        Int
+  budgetVersion   BudgetVersion @relation(fields: [tenantId, budgetVersionId], references: [tenantId, id], onDelete: Restrict)
+  workshop        Workshop      @relation(fields: [tenantId, workshopId], references: [tenantId, id], onDelete: Restrict)
+  items           BudgetItem[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, budgetVersionId])
+  @@map("budget_sections")
+}
+
+model BudgetItem {
+  id              String        @id @default(uuid()) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  budgetSectionId String        @map("budget_section_id") @db.Uuid
+  description     String        @db.VarChar(500)
+  quantity        Decimal       @db.Decimal(12, 3)
+  unit            String        @db.VarChar(50)
+  unitPrice       Decimal       @map("unit_price") @db.Decimal(14, 2)
+  total           Decimal       @db.Decimal(14, 2)
+  position        Int
+  budgetSection   BudgetSection @relation(fields: [tenantId, budgetSectionId], references: [tenantId, id], onDelete: Restrict)
+  workshopTask    WorkshopTask?
+
+  @@unique([tenantId, id])
+  @@index([tenantId, budgetSectionId])
+  @@map("budget_items")
+}
+
+model WorkshopTask {
+  id                   String      @id @default(uuid()) @db.Uuid
+  tenantId             String      @map("tenant_id") @db.Uuid
+  budgetItemId         String?     @map("budget_item_id") @db.Uuid
+  productionId         String      @map("production_id") @db.Uuid
+  workshopId           String      @map("workshop_id") @db.Uuid
+  assigneeMembershipId String?     @map("assignee_membership_id") @db.Uuid
+  status               String      @db.VarChar(100)
+  description          String      @db.VarChar(1000)
+  deadlineAt           DateTime?   @map("deadline_at")
+  completedAt          DateTime?   @map("completed_at")
+  createdAt            DateTime    @default(now()) @map("created_at")
+  updatedAt            DateTime    @updatedAt @map("updated_at")
+  tenant               Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  budgetItem           BudgetItem? @relation(fields: [tenantId, budgetItemId], references: [tenantId, id], onDelete: Restrict)
+  production           Production  @relation(fields: [tenantId, productionId], references: [tenantId, id], onDelete: Restrict)
+  workshop             Workshop    @relation(fields: [tenantId, workshopId], references: [tenantId, id], onDelete: Restrict)
+  assignee             Membership? @relation("WorkshopTaskAssignee", fields: [tenantId, assigneeMembershipId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, budgetItemId])
+  @@index([tenantId, productionId])
+  @@index([tenantId, workshopId])
+  @@index([tenantId, status])
+  @@map("workshop_tasks")
 }
 
 model ProductionHealthEvent {

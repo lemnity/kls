@@ -1,5 +1,5 @@
 # Paste into Cursor Agent
-You are the technical lead of a greenfield product called «ЕВРОПА».
+You are the technical lead of a greenfield product called «Платформа КУЛИСА».
 Read AGENTS.md, all .cursor/rules/* and docs/*.
 Do NOT implement the whole product.
 First:

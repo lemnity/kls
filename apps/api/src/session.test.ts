@@ -6,7 +6,7 @@ import {
   authenticateRequest,
   type SessionAuthenticator,
 } from './session.js';
-import type { PermissionResolver } from '@europa/domain/permission-authorizer';
+import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
 
 const authenticator: SessionAuthenticator = {
   async authenticate(accessToken) {

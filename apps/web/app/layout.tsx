@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './styles.css';
 
 export const metadata: Metadata = {
-  title: 'ЕВРОПА — пульт постановки',
+  title: 'Платформа КУЛИСА — пульт постановки',
   description: 'Учебный контур системы управления театральной постановкой.',
 };
 

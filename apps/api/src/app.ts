@@ -1,10 +1,13 @@
 import { Body,
   BadRequestException,
+  ConflictException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Header,
   Headers,
+  HttpCode,
   HttpStatus,
   Inject,
   Module,
@@ -13,6 +16,7 @@ import { Body,
   Patch,
   Post,
   Res,
+  ServiceUnavailableException,
   UnauthorizedException,
   type DynamicModule,
 } from '@nestjs/common';
@@ -23,9 +27,46 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import type { FastifyInstance } from 'fastify';
-import type { PermissionResolver } from '@europa/domain/permission-authorizer';
-import type { TenantContext } from '@europa/domain/tenant-context';
-import type { StoredRole } from '@europa/db/role-repository';
+import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
+import type { TenantContext } from '@kulisa/domain/tenant-context';
+import type { StoredRole } from '@kulisa/db/role-repository';
+import {
+  OrgUnitParentNotFoundError,
+  type OrgUnitListItem,
+  type StoredOrgUnit,
+} from '@kulisa/db/organization-repository';
+import {
+  MembershipAlreadyExistsError,
+  MembershipRoleNotFoundError,
+  MembershipUserNotFoundError,
+  type StoredMembership,
+} from '@kulisa/db/membership-repository';
+import {
+  ProductionProducerNotFoundError,
+  type ProductionInput,
+  type StoredProduction,
+} from '@kulisa/db/production-repository';
+import {
+  BudgetAlreadyApprovedError,
+  BudgetAlreadyExistsError,
+  BudgetProductionNotFoundError,
+  BudgetSectionWorkshopNotFoundError,
+  type BudgetSectionInput,
+  type CreateBudgetInput,
+  type StoredBudget,
+} from '@kulisa/db/budget-repository';
+import {
+  WorkshopNameAlreadyExistsError,
+  type StoredWorkshop,
+} from '@kulisa/db/workshop-repository';
+import {
+  WorkshopTaskAlreadyExistsError,
+  WorkshopTaskAssigneeNotFoundError,
+  WorkshopTaskBudgetItemNotFoundError,
+  WorkshopTaskBudgetNotApprovedError,
+  type CreateTaskFromBudgetItemInput,
+  type StoredWorkshopTask,
+} from '@kulisa/db/workshop-task-repository';
 
 import {
   SessionAuthorizationError,
@@ -46,6 +87,12 @@ export interface ApiAppOptions {
   localPasswordAuthenticator?: LocalPasswordAuthenticator;
   permissionResolver?: PermissionResolver;
   roleRepository?: RoleRepository;
+  organizationRepository?: OrganizationRepository;
+  membershipRepository?: MembershipRepository;
+  productionRepository?: ProductionRepository;
+  budgetRepository?: BudgetRepository;
+  workshopRepository?: WorkshopRepository;
+  workshopTaskRepository?: WorkshopTaskRepository;
 }
 
 export interface LocalPasswordAuthenticator extends SessionAuthenticator {
@@ -64,11 +111,72 @@ export interface RoleRepository {
   ): Promise<StoredRole | null>;
 }
 
+export interface OrganizationRepository {
+  createOrgUnit(
+    context: TenantContext,
+    input: {
+      name: string;
+      type: string;
+      parentId?: string;
+      managerMembershipId?: string;
+    },
+  ): Promise<StoredOrgUnit>;
+  listOrgUnits(context: TenantContext): Promise<OrgUnitListItem[]>;
+}
+
+export interface MembershipRepository {
+  createMembership(
+    context: TenantContext,
+    input: { userId: string; roleId?: string },
+  ): Promise<StoredMembership>;
+  deactivateMembership(
+    context: TenantContext,
+    membershipId: string,
+  ): Promise<StoredMembership | null>;
+}
+
+export interface ProductionRepository {
+  createProduction(context: TenantContext, input: ProductionInput): Promise<StoredProduction>;
+  getProduction(context: TenantContext, productionId: string): Promise<StoredProduction | null>;
+  listProductions(context: TenantContext): Promise<StoredProduction[]>;
+  updateProduction(
+    context: TenantContext,
+    productionId: string,
+    input: ProductionInput,
+  ): Promise<StoredProduction | null>;
+}
+
+export interface BudgetRepository {
+  createBudget(context: TenantContext, input: CreateBudgetInput): Promise<StoredBudget>;
+  getBudget(context: TenantContext, budgetId: string): Promise<StoredBudget | null>;
+  getBudgetByProductionId(context: TenantContext, productionId: string): Promise<StoredBudget | null>;
+  approveBudget(context: TenantContext, budgetId: string): Promise<StoredBudget | null>;
+}
+
+export interface WorkshopRepository {
+  createWorkshop(context: TenantContext, input: { name: string }): Promise<StoredWorkshop>;
+  listWorkshops(context: TenantContext): Promise<StoredWorkshop[]>;
+}
+
+export interface WorkshopTaskRepository {
+  createTaskFromBudgetItem(
+    context: TenantContext,
+    input: CreateTaskFromBudgetItemInput,
+  ): Promise<StoredWorkshopTask>;
+  listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]>;
+}
+
 const READINESS_PROBES = Symbol('READINESS_PROBES');
 const SESSION_AUTHENTICATOR = Symbol('SESSION_AUTHENTICATOR');
 const LOCAL_PASSWORD_AUTHENTICATOR = Symbol('LOCAL_PASSWORD_AUTHENTICATOR');
 const PERMISSION_RESOLVER = Symbol('PERMISSION_RESOLVER');
 const ROLE_REPOSITORY = Symbol('ROLE_REPOSITORY');
+const ORGANIZATION_REPOSITORY = Symbol('ORGANIZATION_REPOSITORY');
+const MEMBERSHIP_REPOSITORY = Symbol('MEMBERSHIP_REPOSITORY');
+const PRODUCTION_REPOSITORY = Symbol('PRODUCTION_REPOSITORY');
+const BUDGET_REPOSITORY = Symbol('BUDGET_REPOSITORY');
+const WORKSHOP_REPOSITORY = Symbol('WORKSHOP_REPOSITORY');
+const WORKSHOP_TASK_REPOSITORY = Symbol('WORKSHOP_TASK_REPOSITORY');
 
 @Controller()
 class HealthController {
@@ -83,6 +191,18 @@ class HealthController {
     private readonly permissionResolver: PermissionResolver | null,
     @Inject(ROLE_REPOSITORY)
     private readonly roleRepository: RoleRepository | null,
+    @Inject(ORGANIZATION_REPOSITORY)
+    private readonly organizationRepository: OrganizationRepository | null,
+    @Inject(MEMBERSHIP_REPOSITORY)
+    private readonly membershipRepository: MembershipRepository | null,
+    @Inject(PRODUCTION_REPOSITORY)
+    private readonly productionRepository: ProductionRepository | null,
+    @Inject(BUDGET_REPOSITORY)
+    private readonly budgetRepository: BudgetRepository | null,
+    @Inject(WORKSHOP_REPOSITORY)
+    private readonly workshopRepository: WorkshopRepository | null,
+    @Inject(WORKSHOP_TASK_REPOSITORY)
+    private readonly workshopTaskRepository: WorkshopTaskRepository | null,
   ) {}
 
   @Get('health')
@@ -214,6 +334,318 @@ class HealthController {
     return session;
   }
 
+  @Post('v1/organization/org-units')
+  public async createOrgUnit(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown,
+  ): Promise<StoredOrgUnit> {
+    const input = readOrgUnitInput(body);
+    if (!input) throw new BadRequestException('Invalid org unit payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.organizationRepository) {
+      throw new ServiceUnavailableException('Organization service is not configured');
+    }
+    try {
+      return await this.organizationRepository.createOrgUnit(context, input);
+    } catch (error) {
+      if (error instanceof OrgUnitParentNotFoundError) {
+        throw new BadRequestException('Parent org unit not found in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Get('v1/organization/org-units')
+  public async listOrgUnits(
+    @Headers('authorization') authorization: string | undefined,
+  ): Promise<OrgUnitListItem[]> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.organizationRepository) {
+      throw new ServiceUnavailableException('Organization service is not configured');
+    }
+    return this.organizationRepository.listOrgUnits(context);
+  }
+
+  @Post('v1/organization/workshops')
+  public async createWorkshop(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshop> {
+    const name = readWorkshopName(body);
+    if (!name) throw new BadRequestException('Invalid workshop payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopRepository) {
+      throw new ServiceUnavailableException('Workshop service is not configured');
+    }
+    try {
+      return await this.workshopRepository.createWorkshop(context, { name });
+    } catch (error) {
+      if (error instanceof WorkshopNameAlreadyExistsError) {
+        throw new ConflictException('Workshop with this name already exists in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Get('v1/organization/workshops')
+  public async listWorkshops(
+    @Headers('authorization') authorization: string | undefined,
+  ): Promise<StoredWorkshop[]> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopRepository) {
+      throw new ServiceUnavailableException('Workshop service is not configured');
+    }
+    return this.workshopRepository.listWorkshops(context);
+  }
+
+  @Post('v1/budget-items/:budgetItemId/tasks')
+  public async createTaskFromBudgetItem(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('budgetItemId') budgetItemId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTask> {
+    const input = readCreateTaskInput(body);
+    if (!input) throw new BadRequestException('Invalid task payload');
+    if (!UUID_PATTERN.test(budgetItemId)) throw new NotFoundException();
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    try {
+      return await this.workshopTaskRepository.createTaskFromBudgetItem(context, { budgetItemId, ...input });
+    } catch (error) {
+      if (error instanceof WorkshopTaskBudgetItemNotFoundError) throw new NotFoundException();
+      if (error instanceof WorkshopTaskBudgetNotApprovedError) {
+        throw new BadRequestException('Budget item belongs to a budget that is not approved');
+      }
+      if (error instanceof WorkshopTaskAlreadyExistsError) {
+        throw new ConflictException('Budget item already has a workshop task');
+      }
+      if (error instanceof WorkshopTaskAssigneeNotFoundError) {
+        throw new BadRequestException('Assignee not found in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Get('v1/organization/workshops/:workshopId/tasks')
+  public async listWorkshopTasks(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('workshopId') workshopId: string,
+  ): Promise<StoredWorkshopTask[]> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(workshopId)) return [];
+
+    return this.workshopTaskRepository.listTasksByWorkshop(context, workshopId);
+  }
+
+  @Post('v1/organization/memberships')
+  public async createMembership(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown,
+  ): Promise<StoredMembership> {
+    const input = readMembershipInput(body);
+    if (!input) throw new BadRequestException('Invalid membership payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.membershipRepository) {
+      throw new ServiceUnavailableException('Membership service is not configured');
+    }
+    try {
+      return await this.membershipRepository.createMembership(context, input);
+    } catch (error) {
+      if (error instanceof MembershipUserNotFoundError) {
+        throw new BadRequestException('User not found');
+      }
+      if (error instanceof MembershipRoleNotFoundError) {
+        throw new BadRequestException('Role not found in tenant');
+      }
+      if (error instanceof MembershipAlreadyExistsError) {
+        throw new ConflictException('User already has a membership in this tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Delete('v1/organization/memberships/:membershipId')
+  @HttpCode(HttpStatus.OK)
+  public async deactivateMembership(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('membershipId') membershipId: string,
+  ): Promise<StoredMembership> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.membershipRepository) {
+      throw new ServiceUnavailableException('Membership service is not configured');
+    }
+    const membership = await this.membershipRepository.deactivateMembership(context, membershipId);
+    if (!membership) throw new NotFoundException();
+    return membership;
+  }
+
+  @Post('v1/productions')
+  public async createProduction(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown,
+  ): Promise<StoredProduction> {
+    const input = readProductionInput(body);
+    if (!input) throw new BadRequestException('Invalid production payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.productionRepository) {
+      throw new ServiceUnavailableException('Production service is not configured');
+    }
+    try {
+      return await this.productionRepository.createProduction(context, input);
+    } catch (error) {
+      if (error instanceof ProductionProducerNotFoundError) {
+        throw new BadRequestException('Producer membership not found in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Get('v1/productions')
+  public async listProductions(
+    @Headers('authorization') authorization: string | undefined,
+  ): Promise<StoredProduction[]> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.productionRepository) {
+      throw new ServiceUnavailableException('Production service is not configured');
+    }
+    return this.productionRepository.listProductions(context);
+  }
+
+  @Get('v1/productions/:productionId')
+  public async getProduction(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('productionId') productionId: string,
+  ): Promise<StoredProduction> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.productionRepository) {
+      throw new ServiceUnavailableException('Production service is not configured');
+    }
+    if (!UUID_PATTERN.test(productionId)) throw new NotFoundException();
+
+    const production = await this.productionRepository.getProduction(context, productionId);
+    if (!production) throw new NotFoundException();
+    return production;
+  }
+
+  @Patch('v1/productions/:productionId')
+  public async updateProduction(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('productionId') productionId: string,
+    @Body() body: unknown,
+  ): Promise<StoredProduction> {
+    const input = readProductionInput(body);
+    if (!input) throw new BadRequestException('Invalid production payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.productionRepository) {
+      throw new ServiceUnavailableException('Production service is not configured');
+    }
+    try {
+      const production = await this.productionRepository.updateProduction(context, productionId, input);
+      if (!production) throw new NotFoundException();
+      return production;
+    } catch (error) {
+      if (error instanceof ProductionProducerNotFoundError) {
+        throw new BadRequestException('Producer membership not found in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Post('v1/productions/:productionId/budgets')
+  public async createBudget(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('productionId') productionId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudget> {
+    const input = readCreateBudgetInput(body);
+    if (!input) throw new BadRequestException('Invalid budget payload');
+    if (!UUID_PATTERN.test(productionId)) throw new NotFoundException();
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.budgetRepository) {
+      throw new ServiceUnavailableException('Budget service is not configured');
+    }
+    try {
+      return await this.budgetRepository.createBudget(context, { productionId, sections: input.sections });
+    } catch (error) {
+      if (error instanceof BudgetProductionNotFoundError) throw new NotFoundException();
+      if (error instanceof BudgetAlreadyExistsError) {
+        throw new ConflictException('Production already has a budget');
+      }
+      if (error instanceof BudgetSectionWorkshopNotFoundError) {
+        throw new BadRequestException('Workshop not found in tenant');
+      }
+      throw error;
+    }
+  }
+
+  @Get('v1/budgets/:budgetId')
+  public async getBudget(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('budgetId') budgetId: string,
+  ): Promise<StoredBudget> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.budgetRepository) {
+      throw new ServiceUnavailableException('Budget service is not configured');
+    }
+    if (!UUID_PATTERN.test(budgetId)) throw new NotFoundException();
+
+    const budget = await this.budgetRepository.getBudget(context, budgetId);
+    if (!budget) throw new NotFoundException();
+    return budget;
+  }
+
+  @Get('v1/productions/:productionId/budget')
+  public async getBudgetByProduction(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('productionId') productionId: string,
+  ): Promise<StoredBudget> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.budgetRepository) {
+      throw new ServiceUnavailableException('Budget service is not configured');
+    }
+    if (!UUID_PATTERN.test(productionId)) throw new NotFoundException();
+
+    const budget = await this.budgetRepository.getBudgetByProductionId(context, productionId);
+    if (!budget) throw new NotFoundException();
+    return budget;
+  }
+
+  @Post('v1/budgets/:budgetId/approve')
+  @HttpCode(HttpStatus.OK)
+  public async approveBudget(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('budgetId') budgetId: string,
+  ): Promise<StoredBudget> {
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.budgetRepository) {
+      throw new ServiceUnavailableException('Budget service is not configured');
+    }
+    if (!UUID_PATTERN.test(budgetId)) throw new NotFoundException();
+
+    try {
+      const budget = await this.budgetRepository.approveBudget(context, budgetId);
+      if (!budget) throw new NotFoundException();
+      return budget;
+    } catch (error) {
+      if (error instanceof BudgetAlreadyApprovedError) {
+        throw new ConflictException('Budget is already approved');
+      }
+      throw error;
+    }
+  }
+
   private async requirePlatformAdmin(
     authorization: string | undefined,
   ): Promise<TenantContext> {
@@ -250,6 +682,12 @@ function createApiModule(
   localPasswordAuthenticator: LocalPasswordAuthenticator | null,
   permissionResolver: PermissionResolver | null,
   roleRepository: RoleRepository | null,
+  organizationRepository: OrganizationRepository | null,
+  membershipRepository: MembershipRepository | null,
+  productionRepository: ProductionRepository | null,
+  budgetRepository: BudgetRepository | null,
+  workshopRepository: WorkshopRepository | null,
+  workshopTaskRepository: WorkshopTaskRepository | null,
 ): DynamicModule {
   return {
     module: ApiModule,
@@ -275,6 +713,30 @@ function createApiModule(
         provide: ROLE_REPOSITORY,
         useValue: roleRepository,
       },
+      {
+        provide: ORGANIZATION_REPOSITORY,
+        useValue: organizationRepository,
+      },
+      {
+        provide: MEMBERSHIP_REPOSITORY,
+        useValue: membershipRepository,
+      },
+      {
+        provide: PRODUCTION_REPOSITORY,
+        useValue: productionRepository,
+      },
+      {
+        provide: BUDGET_REPOSITORY,
+        useValue: budgetRepository,
+      },
+      {
+        provide: WORKSHOP_REPOSITORY,
+        useValue: workshopRepository,
+      },
+      {
+        provide: WORKSHOP_TASK_REPOSITORY,
+        useValue: workshopTaskRepository,
+      },
     ],
   };
 }
@@ -289,6 +751,12 @@ export async function createApiApp(
       options.localPasswordAuthenticator ?? null,
       options.permissionResolver ?? null,
       options.roleRepository ?? null,
+      options.organizationRepository ?? null,
+      options.membershipRepository ?? null,
+      options.productionRepository ?? null,
+      options.budgetRepository ?? null,
+      options.workshopRepository ?? null,
+      options.workshopTaskRepository ?? null,
     ),
     new FastifyAdapter({ logger: false }),
     { logger: false },
@@ -315,4 +783,157 @@ function readRoleName(body: unknown): string | null {
   if (typeof name !== 'string') return null;
   const normalized = name.trim();
   return normalized.length > 0 && normalized.length <= 100 ? normalized : null;
+}
+
+function readOrgUnitInput(
+  body: unknown,
+): {
+  name: string;
+  type: string;
+  parentId?: string;
+  managerMembershipId?: string;
+} | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const name = normalizeString(input.name, 200);
+  const type = normalizeString(input.type, 100);
+  const parentId = readOptionalUuid(input.parentId);
+  const managerMembershipId = readOptionalUuid(input.managerMembershipId);
+  if (!name || !type || parentId === null || managerMembershipId === null) return null;
+  return {
+    name,
+    type,
+    ...(parentId ? { parentId } : {}),
+    ...(managerMembershipId ? { managerMembershipId } : {}),
+  };
+}
+
+function normalizeString(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= maxLength ? normalized : null;
+}
+
+function readWorkshopName(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  return normalizeString((body as Record<string, unknown>).name, 200);
+}
+
+function readCreateTaskInput(body: unknown): {
+  description?: string;
+  assigneeMembershipId?: string;
+  deadlineAt?: string;
+} | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+
+  const description = input.description === undefined ? undefined : normalizeString(input.description, 1000);
+  if (input.description !== undefined && !description) return null;
+
+  const assigneeMembershipId = readOptionalUuid(input.assigneeMembershipId);
+  if (assigneeMembershipId === null) return null;
+
+  const deadlineAt = readNullableIsoDate(input.deadlineAt);
+  if (deadlineAt === 'invalid') return null;
+
+  return {
+    ...(description ? { description } : {}),
+    ...(assigneeMembershipId ? { assigneeMembershipId } : {}),
+    ...(deadlineAt ? { deadlineAt } : {}),
+  };
+}
+
+function readMembershipInput(
+  body: unknown,
+): { userId: string; roleId?: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const userId = readOptionalUuid(input.userId);
+  const roleId = readOptionalUuid(input.roleId);
+  if (!userId || roleId === null) return null;
+  return { userId, ...(roleId ? { roleId } : {}) };
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function readOptionalUuid(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return null;
+  return UUID_PATTERN.test(value) ? value : null;
+}
+
+function readProductionInput(body: unknown): {
+  title: string;
+  status: string;
+  premiereDate: string | null;
+  producerMembershipId: string | null;
+} | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const title = normalizeString(input.title, 300);
+  const status = normalizeString(input.status, 100);
+  if (!title || !status) return null;
+
+  const premiereDate = readNullableIsoDate(input.premiereDate);
+  if (premiereDate === 'invalid') return null;
+
+  const producerMembershipIdRaw = input.producerMembershipId;
+  const producerMembershipId =
+    producerMembershipIdRaw === undefined || producerMembershipIdRaw === null
+      ? null
+      : typeof producerMembershipIdRaw === 'string' && UUID_PATTERN.test(producerMembershipIdRaw)
+        ? producerMembershipIdRaw
+        : 'invalid';
+  if (producerMembershipId === 'invalid') return null;
+
+  return { title, status, premiereDate, producerMembershipId };
+}
+
+function readNullableIsoDate(value: unknown): string | null | 'invalid' {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !ISO_DATE_PATTERN.test(value)) return 'invalid';
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+    ? value
+    : 'invalid';
+}
+
+const NON_NEGATIVE_DECIMAL_PATTERN = /^\d+(\.\d+)?$/;
+
+function readNonNegativeDecimal(value: unknown, maxScale: number): string | null {
+  if (typeof value !== 'string' || !NON_NEGATIVE_DECIMAL_PATTERN.test(value)) return null;
+  const [, fraction = ''] = value.split('.');
+  return fraction.length <= maxScale ? value : null;
+}
+
+function readCreateBudgetInput(body: unknown): { sections: BudgetSectionInput[] } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const sectionsRaw = (body as Record<string, unknown>).sections;
+  if (!Array.isArray(sectionsRaw)) return null;
+
+  const sections: BudgetSectionInput[] = [];
+  for (const sectionRaw of sectionsRaw) {
+    if (!sectionRaw || typeof sectionRaw !== 'object' || Array.isArray(sectionRaw)) return null;
+    const section = sectionRaw as Record<string, unknown>;
+    const workshopId = readOptionalUuid(section.workshopId);
+    const title = normalizeString(section.title, 200);
+    const itemsRaw = section.items;
+    if (!workshopId || !title || !Array.isArray(itemsRaw)) return null;
+
+    const items = [];
+    for (const itemRaw of itemsRaw) {
+      if (!itemRaw || typeof itemRaw !== 'object' || Array.isArray(itemRaw)) return null;
+      const item = itemRaw as Record<string, unknown>;
+      const description = normalizeString(item.description, 500);
+      const unit = normalizeString(item.unit, 50);
+      const quantity = readNonNegativeDecimal(item.quantity, 3);
+      const unitPrice = readNonNegativeDecimal(item.unitPrice, 2);
+      if (!description || !unit || quantity === null || unitPrice === null) return null;
+      items.push({ description, unit, quantity, unitPrice });
+    }
+    sections.push({ workshopId, title, items });
+  }
+
+  return { sections };
 }

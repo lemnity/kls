@@ -2,6 +2,8 @@
 - Exact role and approval matrix?
 - Exact production stage list? Until it is approved, `productions.status` accepts a non-empty code rather than an invented enum.
 - Exact health indicator algorithm? Until it is approved, `productions.health_status` and history events accept non-empty codes rather than an invented enum.
+- Budget-node status colouring for the visual constructor (Инкремент 8, see `plan/idea.md` and `plan/PLAN_PLATFORM.md` §11): proposed rule is red when accepted task totals exceed the planned amount, green when under, blue when exactly equal — needs discovery confirmation of the equality tolerance and whether this is the same signal as `productions.health_status` or a separate budget-only indicator.
+- Multi-assignee `WorkshopTask` model (Инкремент 3, see `plan/idea.md`): each assignee has an individual completion status and the workshop lead accepts/rejects per task — needs confirmation against the role/approval matrix (previous item) before it is implemented as the default, since the current Инкремент 3 contract assumes a single optional assignee.
 - Exact contract/act/accounting statuses?
 - Definition of final actual production cost?
 - Mandatory fields for each budget version?

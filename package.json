@@ -1,5 +1,5 @@
 {
-  "name": "europa-platform",
+  "name": "kulisa-platform",
   "version": "0.1.0",
   "private": true,
   "packageManager": "npm@11.9.0",
@@ -12,7 +12,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "npm run build --workspace @europa/domain && npm run build --workspace @europa/config && npm run build --workspace @europa/auth && tsc --noEmit -p tsconfig.json"
+    "typecheck": "npm run build --workspace @kulisa/domain && npm run build --workspace @kulisa/config && npm run build --workspace @kulisa/auth && tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
