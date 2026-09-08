@@ -225,6 +225,52 @@ describeIntegration('PostgresOrganizationRepository', () => {
     );
   });
 
+  it('deactivates an org unit, records an audit event, and keeps it visible in the list', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+    const unit = await repository.createOrgUnit(context, { name: 'Пошивочный цех', type: 'workshop' });
+
+    const deactivated = await repository.deactivateOrgUnit(context, unit.id);
+
+    expect(deactivated).toMatchObject({ id: unit.id, name: 'Пошивочный цех', type: 'workshop' });
+    await expect(
+      client.query('SELECT is_active FROM org_units WHERE id = $1', [unit.id]),
+    ).resolves.toMatchObject({ rows: [{ is_active: false }] });
+    await expect(
+      client.query(
+        "SELECT count(*)::int AS count FROM audit_events WHERE action = 'org_unit.deactivated' AND subject_id = $1",
+        [unit.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+
+    const list = await repository.listOrgUnits(context);
+    expect(list).toContainEqual(expect.objectContaining({ id: unit.id, isActive: false }));
+  });
+
+  it('returns null when deactivating an already-inactive org unit, without a duplicate audit event', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+    const unit = await repository.createOrgUnit(context, { name: 'Пошивочный цех', type: 'workshop' });
+    await repository.deactivateOrgUnit(context, unit.id);
+
+    await expect(repository.deactivateOrgUnit(context, unit.id)).resolves.toBeNull();
+    await expect(
+      client.query(
+        "SELECT count(*)::int AS count FROM audit_events WHERE action = 'org_unit.deactivated' AND subject_id = $1",
+        [unit.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('returns null when deactivating an org unit outside the tenant', async () => {
+    const tenantA = await createTenantMembership(client, 'Tenant A');
+    const tenantB = await createTenantMembership(client, 'Tenant B');
+    const repository = new PostgresOrganizationRepository(client);
+    const foreignUnit = await repository.createOrgUnit(tenantB, { name: 'Foreign', type: 'department' });
+
+    await expect(repository.deactivateOrgUnit(tenantA, foreignUnit.id)).resolves.toBeNull();
+  });
+
   it('lists org units scoped to the tenant, ordered by name', async () => {
     const tenantA = await createTenantMembership(client, 'Tenant A');
     const tenantB = await createTenantMembership(client, 'Tenant B');
