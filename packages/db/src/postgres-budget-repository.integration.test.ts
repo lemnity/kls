@@ -192,6 +192,99 @@ describeIntegration('PostgresBudgetRepository', () => {
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 
+  it('creates a new revision on an approved budget, reverting status to DETAILED, without touching the approved snapshot', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetRepository(client);
+    const budget = await repository.createBudget(tenant.context, {
+      productionId: tenant.productionId,
+      sections: [
+        {
+          workshopId: tenant.workshopId,
+          title: 'Пошивочный цех',
+          items: [{ description: 'Ткань', quantity: '1.000', unit: 'м', unitPrice: '100.00' }],
+        },
+      ],
+    });
+    await repository.approveBudget(tenant.context, budget.id);
+
+    const revised = await repository.createBudgetRevision(tenant.context, budget.id, {
+      sections: [
+        {
+          workshopId: tenant.workshopId,
+          title: 'Пошивочный цех',
+          items: [{ description: 'Ткань бархат', quantity: '2.000', unit: 'м', unitPrice: '200.00' }],
+        },
+      ],
+    });
+
+    expect(revised).toMatchObject({ id: budget.id, status: 'DETAILED', revision: 2, total: '400.00' });
+    expect(revised!.sections[0]!.items[0]!.description).toBe('Ткань бархат');
+
+    // the approved revision 1 snapshot is untouched
+    await expect(
+      client.query(
+        `SELECT bi.description, bi.total FROM budget_items bi
+         JOIN budget_sections bs ON bs.id = bi.budget_section_id
+         JOIN budget_versions bv ON bv.id = bs.budget_version_id
+         WHERE bv.budget_id = $1 AND bv.revision = 1`,
+        [budget.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ description: 'Ткань', total: '100.00' }] });
+  });
+
+  it('keeps the current status when revising a not-yet-approved budget', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetRepository(client);
+    const budget = await repository.createBudget(tenant.context, { productionId: tenant.productionId, sections: [] });
+
+    const revised = await repository.createBudgetRevision(tenant.context, budget.id, { sections: [] });
+
+    expect(revised).toMatchObject({ status: 'PRELIMINARY', revision: 2 });
+  });
+
+  it('records a budget.revised audit event with the new revision number', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetRepository(client);
+    const budget = await repository.createBudget(tenant.context, { productionId: tenant.productionId, sections: [] });
+
+    await repository.createBudgetRevision(tenant.context, budget.id, { sections: [] });
+
+    await expect(
+      client.query(
+        "SELECT changes FROM audit_events WHERE action = 'budget.revised' AND subject_id = $1",
+        [budget.id],
+      ),
+    ).resolves.toMatchObject({ rows: [{ changes: { revision: 2 } }] });
+  });
+
+  it('rejects a revision with a workshop from another tenant, without creating a new version', async () => {
+    const tenantA = await createTenantFixture(client, 'Tenant A');
+    const tenantB = await createTenantFixture(client, 'Tenant B');
+    const repository = new PostgresBudgetRepository(client);
+    const budget = await repository.createBudget(tenantA.context, { productionId: tenantA.productionId, sections: [] });
+
+    await expect(
+      repository.createBudgetRevision(tenantA.context, budget.id, {
+        sections: [{ workshopId: tenantB.workshopId, title: 'Foreign', items: [] }],
+      }),
+    ).rejects.toBeInstanceOf(BudgetSectionWorkshopNotFoundError);
+
+    await expect(
+      client.query('SELECT count(*)::int AS count FROM budget_versions WHERE budget_id = $1', [budget.id]),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('returns null when creating a revision for a budget outside the tenant', async () => {
+    const tenantA = await createTenantFixture(client, 'Tenant A');
+    const tenantB = await createTenantFixture(client, 'Tenant B');
+    const repository = new PostgresBudgetRepository(client);
+    const budget = await repository.createBudget(tenantB.context, { productionId: tenantB.productionId, sections: [] });
+
+    await expect(
+      repository.createBudgetRevision(tenantA.context, budget.id, { sections: [] }),
+    ).resolves.toBeNull();
+  });
+
   it('rejects approving an already-approved budget', async () => {
     const tenant = await createTenantFixture(client, 'Tenant A');
     const repository = new PostgresBudgetRepository(client);
