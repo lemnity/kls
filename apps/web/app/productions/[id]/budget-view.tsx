@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
+import { SortIcon } from '../../icons.js';
 import { pluralize } from '../../lib/format.js';
 import type { Budget } from '../../lib/mock-data.js';
 
@@ -83,10 +84,18 @@ export function BudgetView({ budget }: { budget: Budget }) {
               <table className="budget-items-table">
                 <thead>
                   <tr>
-                    <th scope="col">Описание</th>
+                    <th scope="col">
+                      <span className="th-label">
+                        Описание <SortIcon className="sort-caret" />
+                      </span>
+                    </th>
                     <th scope="col">Кол-во</th>
                     <th scope="col">Цена</th>
-                    <th scope="col">Сумма</th>
+                    <th scope="col">
+                      <span className="th-label">
+                        Сумма <SortIcon className="sort-caret" />
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
