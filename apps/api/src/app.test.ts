@@ -2255,6 +2255,102 @@ describe('API health endpoints', () => {
     }
   });
 
+  it('rejects unauthenticated budget revision creation', async () => {
+    const app = await createApiApp();
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/budgets/11111111-1111-4111-8111-111111111111/revisions',
+        payload: { sections: [] },
+      });
+
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates a budget revision, 404s for an unknown budget, and maps a foreign workshop to 400', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const budgetId = '11111111-1111-4111-8111-111111111111';
+    const unknownId = '22222222-2222-4222-8222-222222222222';
+    const foreignWorkshopId = '33333333-3333-4333-8333-333333333333';
+    const revisionCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetRepository: {
+        async createBudget() {
+          throw new Error('not used in this test');
+        },
+        async getBudget() {
+          throw new Error('not used in this test');
+        },
+        async getBudgetByProductionId() {
+          throw new Error('not used in this test');
+        },
+        async approveBudget() {
+          throw new Error('not used in this test');
+        },
+        async createBudgetRevision(context: unknown, id: string, input: unknown) {
+          revisionCalls.push({ context, id, input });
+          if (id === unknownId) return null;
+          if ((input as { sections: { workshopId: string }[] }).sections[0]?.workshopId === foreignWorkshopId) {
+            throw new BudgetSectionWorkshopNotFoundError(foreignWorkshopId);
+          }
+          return {
+            id: budgetId,
+            productionId: 'production-a',
+            status: 'DETAILED',
+            versionId: 'v-2',
+            revision: 2,
+            sections: [],
+            total: '0.00',
+          };
+        },
+      },
+    } as never);
+
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: `/v1/budgets/${budgetId}/revisions`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { sections: [] },
+      });
+      const notFound = await app.inject({
+        method: 'POST',
+        url: `/v1/budgets/${unknownId}/revisions`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { sections: [] },
+      });
+      const foreignWorkshop = await app.inject({
+        method: 'POST',
+        url: `/v1/budgets/${budgetId}/revisions`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: {
+          sections: [{ workshopId: foreignWorkshopId, title: 'Foreign', items: [] }],
+        },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({ status: 'DETAILED', revision: 2 });
+      expect(notFound.statusCode).toBe(404);
+      expect(foreignWorkshop.statusCode).toBe(400);
+      expect(revisionCalls).toHaveLength(3);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('creates a password-authenticated session without caching the access token', async () => {
     const localPasswordAuthenticator = {
       async login(input: { email: string; password: string }) {

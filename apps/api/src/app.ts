@@ -173,6 +173,11 @@ export interface BudgetRepository {
   getBudget(context: TenantContext, budgetId: string): Promise<StoredBudget | null>;
   getBudgetByProductionId(context: TenantContext, productionId: string): Promise<StoredBudget | null>;
   approveBudget(context: TenantContext, budgetId: string): Promise<StoredBudget | null>;
+  createBudgetRevision(
+    context: TenantContext,
+    budgetId: string,
+    input: { sections: BudgetSectionInput[] },
+  ): Promise<StoredBudget | null>;
 }
 
 export interface WorkshopRepository {
@@ -913,6 +918,38 @@ class HealthController {
       }
       throw error;
     }
+  }
+
+  @Post('v1/budgets/:budgetId/revisions')
+  public async createBudgetRevision(
+    @Req() request: FastifyRequest,
+    @Param('budgetId') budgetId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudget> {
+    const input = readCreateBudgetInput(body);
+    if (!input) throw new BadRequestException('Invalid budget payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetRepository) {
+      throw new ServiceUnavailableException('Budget service is not configured');
+    }
+    if (!UUID_PATTERN.test(budgetId)) throw new NotFoundException();
+
+    try {
+      const budget = await this.budgetRepository.createBudgetRevision(context, budgetId, input);
+      if (!budget) throw new NotFoundException();
+      return budget;
+    } catch (error) {
+      throw this.mapBudgetRevisionError(error);
+    }
+  }
+
+  private mapBudgetRevisionError(error: unknown): Error {
+    if (error instanceof BudgetSectionWorkshopNotFoundError) {
+      return new BadRequestException('Workshop not found in tenant');
+    }
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
   }
 
   private async requirePlatformAdmin(

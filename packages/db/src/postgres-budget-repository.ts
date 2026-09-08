@@ -192,6 +192,96 @@ export class PostgresBudgetRepository {
     return this.queryBudget('b.id = $1 AND b.tenant_id = $2', [budgetId, context.tenantId]);
   }
 
+  /**
+   * Adds a new revision on top of a budget's current one, leaving every
+   * earlier revision (including an approved one) untouched. An approved
+   * budget reverts to DETAILED so it goes back through `approveBudget`;
+   * a still-draft budget keeps its current status.
+   */
+  public async createBudgetRevision(
+    context: TenantContext,
+    budgetId: string,
+    input: { sections: BudgetSectionInput[] },
+  ): Promise<StoredBudget | null> {
+    const existing = await this.client.query<{ status: BudgetStatus; maxRevision: number }>(
+      `SELECT b.status, (SELECT MAX(revision) FROM budget_versions WHERE tenant_id = $2 AND budget_id = $1) AS "maxRevision"
+       FROM budgets b
+       WHERE b.id = $1 AND b.tenant_id = $2`,
+      [budgetId, context.tenantId],
+    );
+    const current = existing.rows[0];
+    if (!current) return null;
+
+    const requestedWorkshopIds = [...new Set(input.sections.map((section) => section.workshopId))];
+    if (requestedWorkshopIds.length > 0) {
+      const workshopCheck = await this.client.query<{ id: string }>(
+        'SELECT id FROM workshops WHERE tenant_id = $1 AND id = ANY($2::uuid[])',
+        [context.tenantId, requestedWorkshopIds],
+      );
+      const foundIds = new Set(workshopCheck.rows.map((row) => row.id));
+      const missing = requestedWorkshopIds.find((id) => !foundIds.has(id));
+      if (missing) throw new BudgetSectionWorkshopNotFoundError(missing);
+    }
+
+    const nextRevision = current.maxRevision + 1;
+    const nextStatus: BudgetStatus = current.status === 'APPROVED' ? 'DETAILED' : current.status;
+    const versionId = randomUUID();
+    const sectionsPayload = input.sections.map((section, sectionIndex) => ({
+      id: randomUUID(),
+      workshopId: section.workshopId,
+      title: section.title,
+      position: sectionIndex,
+      items: section.items.map((item, itemIndex) => ({
+        id: randomUUID(),
+        description: item.description,
+        quantity: item.quantity,
+        unit: item.unit,
+        unitPrice: item.unitPrice,
+        total: multiplyQuantityByUnitPrice(item.quantity, item.unitPrice),
+        position: itemIndex,
+      })),
+    }));
+
+    await this.client.query(
+      `WITH input AS (
+         SELECT $1::jsonb AS sections
+       ), version_ins AS (
+         INSERT INTO budget_versions (id, tenant_id, budget_id, revision, created_by_membership_id)
+         VALUES ($2, $3, $4, $5, $6)
+         RETURNING id
+       ), sections_ins AS (
+         INSERT INTO budget_sections (id, tenant_id, budget_version_id, workshop_id, title, position)
+         SELECT (s->>'id')::uuid, $3, v.id, (s->>'workshopId')::uuid, s->>'title', (s->>'position')::int
+         FROM version_ins v, input, jsonb_array_elements(input.sections) AS s
+         RETURNING id
+       ), items_ins AS (
+         INSERT INTO budget_items (id, tenant_id, budget_section_id, description, quantity, unit, unit_price, total, position)
+         SELECT (i->>'id')::uuid, $3, (s->>'id')::uuid, i->>'description', (i->>'quantity')::numeric,
+                i->>'unit', (i->>'unitPrice')::numeric, (i->>'total')::numeric, (i->>'position')::int
+         FROM input, jsonb_array_elements(input.sections) AS s, jsonb_array_elements(s->'items') AS i
+         RETURNING id
+       ), budget_upd AS (
+         UPDATE budgets SET status = $7, updated_at = NOW() WHERE id = $4 AND tenant_id = $3
+         RETURNING id
+       )
+       INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+       SELECT $8, $3, $6, 'budget.revised', 'budget', id, jsonb_build_object('revision', $5)
+       FROM budget_upd`,
+      [
+        JSON.stringify(sectionsPayload),
+        versionId,
+        context.tenantId,
+        budgetId,
+        nextRevision,
+        context.membershipId,
+        nextStatus,
+        randomUUID(),
+      ],
+    );
+
+    return this.getBudget(context, budgetId);
+  }
+
   public async approveBudget(context: TenantContext, budgetId: string): Promise<StoredBudget | null> {
     const existing = await this.client.query<{ status: BudgetStatus }>(
       'SELECT status FROM budgets WHERE id = $1 AND tenant_id = $2',
