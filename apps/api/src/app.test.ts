@@ -18,7 +18,7 @@ import {
   BudgetProductionNotFoundError,
   BudgetSectionWorkshopNotFoundError,
 } from '@kulisa/db/budget-repository';
-import { WorkshopNameAlreadyExistsError } from '@kulisa/db/workshop-repository';
+import { WorkshopManagerNotFoundError, WorkshopNameAlreadyExistsError } from '@kulisa/db/workshop-repository';
 import {
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
@@ -597,6 +597,204 @@ describe('API health endpoints', () => {
       });
 
       expect(response.statusCode).toBe(409);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates a workshop with a manager membership', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const managerMembershipId = '11111111-1111-4111-8111-111111111111';
+    const createCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop(context: unknown, input: unknown) {
+          createCalls.push({ context, input });
+          return { id: 'workshop-a', name: 'Пошивочный цех', isActive: true, managerMembershipId };
+        },
+        async listWorkshops() {
+          return [];
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/organization/workshops',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'Пошивочный цех', managerMembershipId },
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({ managerMembershipId });
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a', membershipId: 'membership-a' }),
+        input: { name: 'Пошивочный цех', managerMembershipId },
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects creating a workshop with a manager membership outside the tenant', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop() {
+          throw new WorkshopManagerNotFoundError('11111111-1111-4111-8111-111111111111');
+        },
+        async listWorkshops() {
+          return [];
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/organization/workshops',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'Пошивочный цех', managerMembershipId: '11111111-1111-4111-8111-111111111111' },
+      });
+
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unauthenticated workshop manager assignment', async () => {
+    const app = await createApiApp();
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/workshops/11111111-1111-4111-8111-111111111111/manager',
+        payload: { managerMembershipId: null },
+      });
+
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('assigns a workshop manager and allows clearing it with null', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const workshopId = '22222222-2222-4222-8222-222222222222';
+    const managerMembershipId = '11111111-1111-4111-8111-111111111111';
+    const assignCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop() {
+          throw new Error('not used in this test');
+        },
+        async listWorkshops() {
+          return [];
+        },
+        async assignWorkshopManager(context: unknown, id: unknown, managerId: unknown) {
+          assignCalls.push({ context, id, managerId });
+          return { id: workshopId, name: 'Пошивочный цех', isActive: true, managerMembershipId: managerId };
+        },
+      },
+    } as never);
+
+    try {
+      const assign = await app.inject({
+        method: 'PATCH',
+        url: `/v1/organization/workshops/${workshopId}/manager`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { managerMembershipId },
+      });
+      const clear = await app.inject({
+        method: 'PATCH',
+        url: `/v1/organization/workshops/${workshopId}/manager`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { managerMembershipId: null },
+      });
+
+      expect(assign.statusCode).toBe(200);
+      expect(assign.json()).toMatchObject({ managerMembershipId });
+      expect(clear.statusCode).toBe(200);
+      expect(clear.json()).toMatchObject({ managerMembershipId: null });
+      expect(assignCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: workshopId, managerId: managerMembershipId },
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: workshopId, managerId: null },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 404 for an unknown workshop and 400 for a payload missing managerMembershipId', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop() {
+          throw new Error('not used in this test');
+        },
+        async listWorkshops() {
+          return [];
+        },
+        async assignWorkshopManager() {
+          return null;
+        },
+      },
+    } as never);
+
+    try {
+      const notFound = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/workshops/22222222-2222-4222-8222-222222222222/manager',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { managerMembershipId: null },
+      });
+      const invalidPayload = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/workshops/22222222-2222-4222-8222-222222222222/manager',
+        headers: { authorization: 'Bearer token-a' },
+        payload: {},
+      });
+
+      expect(notFound.statusCode).toBe(404);
+      expect(invalidPayload.statusCode).toBe(400);
     } finally {
       await app.close();
     }

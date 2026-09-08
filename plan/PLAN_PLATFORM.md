@@ -120,6 +120,7 @@
 - [x] Реализовать org-unit tree API с проверкой, что `parent_id` принадлежит тому же tenant и не образует цикл.
 - [x] Реализовать перемещение org-unit (смена `parent_id`) с проверкой, что новый `parent_id` не создаёт цикл в дереве текущего tenant (`PATCH /v1/organization/org-units/:orgUnitId/move`, `PostgresOrganizationRepository.moveOrgUnit` — recursive-CTE ancestor check, `OrgUnitCycleError` 400, кросс-tenant `parentId` → `OrgUnitParentNotFoundError` 400, чужой org unit → 404, audit event `org_unit.moved` с old/new parent).
 - [x] Реализовать membership management только для роли theatre admin; удаления заменять деактивацией, чтобы не разрушить историю и audit.
+- [x] Реализовать назначение руководителя цеха: `manager_membership_id` уже был в схеме `Workshop`, но нигде не выставлялся — добавлены `managerMembershipId` в `POST /v1/organization/workshops` (опционально при создании) и `PATCH /v1/organization/workshops/:workshopId/manager` (назначить/сменить/снять через `null`), с проверкой, что membership принадлежит tenant (`WorkshopManagerNotFoundError` → 400), 404 для чужого цеха, audit event `workshop.manager_assigned`. UI создания цехов сознательно ещё не существует (см. `/workshops`: «Цеха создаются через API — UI создания появится позже») — назначение руководителя пока тоже только через API, тем же путём.
 - [x] Реализовать CRUD спектакля: название, статус, плановая премьера, продюсер; создание автоматически делает audit event.
 - [ ] Реализовать dashboard «все постановки»: карточка показывает название, текущий этап, deadline ближайшего риска и health indicator; причины отображаются только пользователям с доступом к постановке.
 - [x] Добавить responsive views: desktop dashboard (сетка карточек), tablet/mobile список (одна колонка), клик/переход по названию открывает `/productions/[id]`. `:focus-visible` на всех интерактивных элементах, семантические `<table>`/`<a>`/`<button>` вместо кастомных виджетов.
@@ -127,7 +128,7 @@
 
 ### Приёмка
 
-- [ ] Администратор настраивает пять цехов и назначает руководителей без изменения записей другого tenant.
+- [x] Администратор настраивает пять цехов и назначает руководителей без изменения записей другого tenant: подтверждено integration-тестами (`postgres-workshop-repository.integration.test.ts`) — создание с менеджером своего tenant, отказ для менеджера чужого tenant без создания цеха, назначение/смена/снятие менеджера с audit event на каждое действие, 404 при попытке назначить менеджера цеху другого tenant.
 - [ ] Продюсер создаёт спектакль и видит его на dashboard; наблюдатель открывает только разрешённую информацию.
 - [ ] История не теряется при деактивации сотрудника или подразделения.
 
