@@ -2165,6 +2165,7 @@ describe('request logging', () => {
       requestLogging: { stream },
     });
 
+    let sessionRequestId: string;
     try {
       const response = await app.inject({
         method: 'GET',
@@ -2172,6 +2173,7 @@ describe('request logging', () => {
         headers: { authorization: 'Bearer super-secret-token' },
       });
       expect(response.statusCode).toBe(200);
+      sessionRequestId = response.json<{ requestId: string }>().requestId;
     } finally {
       await app.close();
     }
@@ -2185,6 +2187,9 @@ describe('request logging', () => {
     expect(logged).not.toContain('super-secret-token');
     const withReqId = lines.filter((line) => typeof line.reqId === 'string' && line.reqId.length > 0);
     expect(withReqId.length).toBeGreaterThan(0);
+    // TenantContext.requestId must be the real Fastify per-request id, not an
+    // unrelated randomUUID() minted independently inside the auth path.
+    expect(withReqId.every((line) => line.reqId === sessionRequestId)).toBe(true);
 
     const requestLine = lines.find(
       (line) => (line.req as Record<string, unknown> | undefined)?.headers !== undefined,
