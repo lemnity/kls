@@ -1,9 +1,15 @@
 import 'reflect-metadata';
 
-import { LocalPasswordAuthService } from '@europa/auth/local-session';
-import { loadEnvironment } from '@europa/config/environment';
-import { PostgresPermissionResolver } from '@europa/db/permission-resolver';
-import { PostgresRoleRepository } from '@europa/db/role-repository';
+import { LocalPasswordAuthService } from '@kulisa/auth/local-session';
+import { loadEnvironment } from '@kulisa/config/environment';
+import { PostgresPermissionResolver } from '@kulisa/db/permission-resolver';
+import { PostgresOrganizationRepository } from '@kulisa/db/organization-repository';
+import { PostgresMembershipRepository } from '@kulisa/db/membership-repository';
+import { PostgresProductionRepository } from '@kulisa/db/production-repository';
+import { PostgresBudgetRepository } from '@kulisa/db/budget-repository';
+import { PostgresWorkshopRepository } from '@kulisa/db/workshop-repository';
+import { PostgresWorkshopTaskRepository } from '@kulisa/db/workshop-task-repository';
+import { PostgresRoleRepository } from '@kulisa/db/role-repository';
 import { Pool } from 'pg';
 
 import { createApiApp } from './app.js';
@@ -23,6 +29,12 @@ const app = await createApiApp({
   localPasswordAuthenticator,
   permissionResolver: new PostgresPermissionResolver(databasePool),
   roleRepository: new PostgresRoleRepository(databasePool),
+  organizationRepository: new PostgresOrganizationRepository(databasePool),
+  membershipRepository: new PostgresMembershipRepository(databasePool),
+  productionRepository: new PostgresProductionRepository(databasePool),
+  budgetRepository: new PostgresBudgetRepository(databasePool),
+  workshopRepository: new PostgresWorkshopRepository(databasePool),
+  workshopTaskRepository: new PostgresWorkshopTaskRepository(databasePool),
 });
 app.addHook('onClose', async () => databasePool.end());
 await app.listen({ host, port });

@@ -1,5 +1,5 @@
 {
-  "name": "@europa/db",
+  "name": "@kulisa/db",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,6 +11,30 @@
     "./role-repository": {
       "types": "./dist/postgres-role-repository.d.ts",
       "default": "./dist/postgres-role-repository.js"
+    },
+    "./organization-repository": {
+      "types": "./dist/postgres-organization-repository.d.ts",
+      "default": "./dist/postgres-organization-repository.js"
+    },
+    "./membership-repository": {
+      "types": "./dist/postgres-membership-repository.d.ts",
+      "default": "./dist/postgres-membership-repository.js"
+    },
+    "./production-repository": {
+      "types": "./dist/postgres-production-repository.d.ts",
+      "default": "./dist/postgres-production-repository.js"
+    },
+    "./budget-repository": {
+      "types": "./dist/postgres-budget-repository.d.ts",
+      "default": "./dist/postgres-budget-repository.js"
+    },
+    "./workshop-repository": {
+      "types": "./dist/postgres-workshop-repository.d.ts",
+      "default": "./dist/postgres-workshop-repository.js"
+    },
+    "./workshop-task-repository": {
+      "types": "./dist/postgres-workshop-task-repository.d.ts",
+      "default": "./dist/postgres-workshop-task-repository.js"
     }
   },
   "scripts": {
@@ -20,11 +44,12 @@
     "migrate:dev": "node ../../node_modules/prisma/build/index.js migrate dev --config prisma.config.ts",
     "migrate:deploy": "node ../../node_modules/prisma/build/index.js migrate deploy --config prisma.config.ts",
     "migrate:status": "node ../../node_modules/prisma/build/index.js migrate status --config prisma.config.ts",
-    "test:integration": "vitest run --root ../.. packages/db/src/tenant-integrity.integration.test.ts packages/db/src/demo-seed.integration.test.ts packages/db/src/auth-schema.integration.test.ts packages/db/src/postgres-permission-resolver.integration.test.ts packages/db/src/postgres-role-repository.integration.test.ts packages/db/src/organization-production-schema.integration.test.ts",
+    "test:integration": "vitest run --root ../.. packages/db/src/tenant-integrity.integration.test.ts packages/db/src/demo-seed.integration.test.ts packages/db/src/auth-schema.integration.test.ts packages/db/src/postgres-permission-resolver.integration.test.ts packages/db/src/postgres-role-repository.integration.test.ts packages/db/src/postgres-organization-repository.integration.test.ts packages/db/src/postgres-membership-repository.integration.test.ts packages/db/src/postgres-production-repository.integration.test.ts packages/db/src/postgres-budget-repository.integration.test.ts packages/db/src/postgres-workshop-repository.integration.test.ts packages/db/src/postgres-workshop-task-repository.integration.test.ts packages/db/src/organization-production-schema.integration.test.ts",
     "seed:demo": "tsx src/seed-demo.ts"
   },
   "dependencies": {
-    "@europa/domain": "file:../domain",
+    "@kulisa/auth": "file:../auth",
+    "@kulisa/domain": "file:../domain",
     "pg": "8.23.0"
   }
 }

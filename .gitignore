@@ -9,3 +9,7 @@ coverage/
 .DS_Store
 *.tsbuildinfo
 packages/db/src/generated/
+test-results/
+playwright-report/
+playwright/.cache/
+blob-report/

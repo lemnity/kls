@@ -3,12 +3,12 @@ import {
   TenantAccessDeniedError,
   type MembershipIdentity,
   type TenantContext,
-} from '@europa/domain/tenant-context';
+} from '@kulisa/domain/tenant-context';
 import {
   PermissionDeniedError,
   requirePermission,
   type PermissionResolver,
-} from '@europa/domain/permission-authorizer';
+} from '@kulisa/domain/permission-authorizer';
 
 export interface VerifiedSession {
   userId: string;

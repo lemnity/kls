@@ -1,5 +1,5 @@
 {
-  "name": "@europa/domain",
+  "name": "@kulisa/domain",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,6 +15,10 @@
     "./permission-authorizer": {
       "types": "./dist/permission-authorizer.d.ts",
       "default": "./dist/permission-authorizer.js"
+    },
+    "./money": {
+      "types": "./dist/money.d.ts",
+      "default": "./dist/money.js"
     }
   },
   "scripts": {

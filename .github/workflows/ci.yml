@@ -35,9 +35,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run validate --workspace @europa/db
-      - run: npm run migrate:deploy --workspace @europa/db
+      - run: npm run validate --workspace @kulisa/db
+      - run: npm run migrate:deploy --workspace @kulisa/db
       - run: npm test
-      - run: npm run test:integration --workspace @europa/db
+      - run: npm run test:integration --workspace @kulisa/db
       - run: npm run typecheck
       - run: npm run build

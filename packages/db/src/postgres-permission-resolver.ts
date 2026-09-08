@@ -1,5 +1,5 @@
-import type { PermissionResolver } from '@europa/domain/permission-authorizer';
-import type { TenantContext } from '@europa/domain/tenant-context';
+import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
+import type { TenantContext } from '@kulisa/domain/tenant-context';
 import type { Client } from 'pg';
 
 type SqlClient = Pick<Client, 'query'>;

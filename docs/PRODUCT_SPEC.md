@@ -1,4 +1,4 @@
-# Product Specification — ЕВРОПА
+# Product Specification — Платформа КУЛИСА
 
 ## Product
 Система, в которой театр ведет спектакль от первой сметы до денег в прокате.
@@ -9,7 +9,7 @@ Workflow: смета → задачи цехам → согласования �
 Точная permission matrix уточняется на Sprint 0.
 
 ## Multi-tenancy
-Данные театров строго разделены. Оргструктура и цеха настраиваются. Возможен demo tenant «Театр Европа».
+Данные театров строго разделены. Оргструктура и цеха настраиваются. Возможен demo tenant «Кулиса».
 
 ## Stage 01
 - identity / organization / roles / hierarchy;

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 
-import type { MembershipIdentity } from '@europa/domain/tenant-context';
+import type { MembershipIdentity } from '@kulisa/domain/tenant-context';
 
 import { verifyPassword } from './password.js';
 

@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 
+import { hashPassword } from '@kulisa/auth/password';
 import { Client, type QueryResult } from 'pg';
 
 export const demoTenant = {
@@ -8,8 +9,9 @@ export const demoTenant = {
   userId: '00000000-0000-4000-8000-000000000003',
   membershipId: '00000000-0000-4000-8000-000000000004',
   permissionId: '00000000-0000-4000-8000-000000000005',
-  name: 'Театр Европа',
-  adminEmail: 'admin@theatre-europa.example.test',
+  name: 'Кулиса',
+  adminEmail: 'demo@demo.ru',
+  adminPassword: 'demo',
 } as const;
 
 export interface DatabaseClient {
@@ -45,6 +47,13 @@ export async function seedDemoTenant(client: DatabaseClient): Promise<void> {
   await client.query(
     'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2) ON CONFLICT (role_id, permission_id) DO NOTHING',
     [demoTenant.roleId, demoTenant.permissionId],
+  );
+  // Local/demo-only shortcut, not the controlled initial-admin provisioning flow
+  // from docs/OPEN_QUESTIONS.md — resets the password hash on every seed run so
+  // the demo credential stays predictable.
+  await client.query(
+    'INSERT INTO password_credentials (user_id, password_hash, updated_at) VALUES ($1, $2, NOW()) ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = NOW()',
+    [demoTenant.userId, await hashPassword(demoTenant.adminPassword)],
   );
 }
 

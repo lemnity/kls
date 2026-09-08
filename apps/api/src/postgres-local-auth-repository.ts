@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { LocalAuthRepository } from '@europa/auth/local-session';
+import type { LocalAuthRepository } from '@kulisa/auth/local-session';
 import type { Client } from 'pg';
 
 type SqlClient = Pick<Client, 'query'>;

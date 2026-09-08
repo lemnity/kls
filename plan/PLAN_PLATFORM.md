@@ -1,4 +1,4 @@
-# ЕВРОПА — подробный план реализации платформы
+# Платформа КУЛИСА — подробный план реализации платформы
 
 > **Для исполнителя:** выполнять задачи последовательно, отмечая чекбоксы. Перед началом каждого блока прочитать `AGENTS.md`, `docs/PRODUCT_SPEC.md`, `docs/ACCEPTANCE.md`, `docs/DATA_MODEL.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md` и актуальные ADR. Не переходить к следующему инкременту, пока не пройдены его проверки и приёмка.
 
@@ -30,7 +30,7 @@
 - [x] Initial migration применена к чистой PostgreSQL; `migrate:status` подтверждает актуальную схему.
 - [x] DB-интеграционные тесты подтверждают запрет cross-tenant role/audit actor links и прямого изменения audit event.
 - [x] API `/ready` проверяет реальные PostgreSQL, Redis и MinIO; локальный HTTP-check с healthy dependencies вернул `200`.
-- [x] Создан idempotent seed demo tenant «Театр Европа» с synthetic admin identity; два запуска не создают дубликаты.
+- [x] Создан idempotent seed demo tenant «Кулиса» с synthetic admin identity; два запуска не создают дубликаты.
 - [x] Scoped repositories для current identity/audit models получают tenant только из `TenantContext` для read/write/append.
 - [x] Локальный password auth: scrypt credentials, opaque bearer tokens с SHA-256 hash в БД, active-membership verification и `POST /v1/auth/login` с `Cache-Control: no-store`.
 - [x] Backend authorization guard fail closed: demo role `theatre_admin` получает тестовую permission `platform.admin`; HTTP `GET /v1/admin/session` проверяет verified session и permission через PostgreSQL.
@@ -72,7 +72,7 @@
 
 ### Результат
 
-К концу недели 2 есть подписанный документ рабочих правил ТБДТ, утверждённые ADR-001 и ADR-002, запускаемые web/API/worker/инфраструктура, учебный tenant «Театр Европа», тест межtenant-изоляции и неизменяемый audit foundation.
+К концу недели 2 есть подписанный документ рабочих правил ТБДТ, утверждённые ADR-001 и ADR-002, запускаемые web/API/worker/инфраструктура, учебный tenant «Кулиса», тест межtenant-изоляции и неизменяемый audit foundation.
 
 ### Файлы и артефакты
 
@@ -116,12 +116,13 @@
 
 ### Шаги
 
-- [ ] Написать migration для `OrgUnit`, `EmployeeProfile`, `Workshop`, `Production` и `ProductionHealthEvent`; добавить индексы `(tenant_id, id)`, `(tenant_id, status)` и уникальности, согласованные в discovery.
-- [ ] Реализовать org-unit tree API с проверкой, что `parent_id` принадлежит тому же tenant и не образует цикл.
-- [ ] Реализовать membership management только для роли theatre admin; удаления заменять деактивацией, чтобы не разрушить историю и audit.
-- [ ] Реализовать CRUD спектакля: название, статус, плановая премьера, продюсер; создание автоматически делает audit event.
+- [x] Написать migration для `OrgUnit`, `EmployeeProfile`, `Workshop`, `Production` и `ProductionHealthEvent`; добавить индексы `(tenant_id, id)`, `(tenant_id, status)` и уникальности, согласованные в discovery.
+- [x] Реализовать org-unit tree API с проверкой, что `parent_id` принадлежит тому же tenant и не образует цикл.
+- [ ] Реализовать перемещение org-unit (смена `parent_id`) с проверкой, что новый `parent_id` не создаёт цикл в дереве текущего tenant.
+- [x] Реализовать membership management только для роли theatre admin; удаления заменять деактивацией, чтобы не разрушить историю и audit.
+- [x] Реализовать CRUD спектакля: название, статус, плановая премьера, продюсер; создание автоматически делает audit event.
 - [ ] Реализовать dashboard «все постановки»: карточка показывает название, текущий этап, deadline ближайшего риска и health indicator; причины отображаются только пользователям с доступом к постановке.
-- [ ] Добавить responsive views: desktop dashboard, tablet list, mobile список с переходом в спектакль. Проверить клавиатурную навигацию, focus states, label/contrast.
+- [x] Добавить responsive views: desktop dashboard (сетка карточек), tablet/mobile список (одна колонка), клик/переход по названию открывает `/productions/[id]`. `:focus-visible` на всех интерактивных элементах, семантические `<table>`/`<a>`/`<button>` вместо кастомных виджетов.
 - [ ] Написать API и browser E2E: theatre admin создаёт цех/спектакль; workshop manager видит только назначенные объекты; viewer/auditor не создаёт и не изменяет записи.
 
 ### Приёмка
@@ -138,11 +139,14 @@
 
 ### Шаги
 
-- [ ] Создать migrations для `Budget`, `BudgetVersion`, `BudgetSection`, `BudgetItem`, `BudgetTemplate`; зафиксировать precision/scale в ADR-001.
-- [ ] Реализовать сервис расчёта строки: `total = quantity × unit_price`; суммы разделов и сметы агрегируются на API, не передаются доверенно из клиента.
-- [ ] Создать API создания сметы и черновой версии; любой edit создаёт новую revision либо записывает согласованный draft workflow, но не меняет approved snapshot.
+- [x] Создать migrations для `Budget`, `BudgetVersion`, `BudgetSection`, `BudgetItem`; зафиксировать precision/scale в ADR-001 (деньги `numeric(14,2)`, количество `numeric(12,3)`).
+- [ ] Создать migration для `BudgetTemplate`; понадобится к Инкременту 8 (библиотека типовых карточек), сейчас не используется — отложено, а не забыто.
+- [x] Реализовать сервис расчёта строки: `total = quantity × unit_price`; суммы разделов и сметы агрегируются на API (`packages/domain/src/money.ts`, BigInt fixed-point, round-half-up), не передаются доверенно из клиента.
+- [x] Создать API создания сметы и черновой версии (`POST /v1/productions/:productionId/budgets`, `GET /v1/budgets/:budgetId`): первая версия сметы (revision 1) создаётся атомарно с разделами/строками, итоги всегда пересчитываются сервером.
+- [x] Реализовать переход сметы в approved: `POST /v1/budgets/:budgetId/approve` — one-way (PRELIMINARY/DETAILED → APPROVED), повторный approve отклоняется (409), audit event `budget.approved`. Это разблокировало Инкремент 3 (задача создаётся только из approved-позиции).
+- [ ] Реализовать полноценный edit-workflow: изменение позиций уже approved сметы создаёт новую revision (или согласованный draft workflow до approve), не изменяя approved snapshot напрямую. Сейчас approve — терминальное состояние без возможности редактирования после него.
 - [ ] Реализовать три UI-представления: предварительная, подробная, утверждённая; фильтр по цеху, итог и история версий.
-- [ ] Добавить server validation: quantity неотрицательное, цена неотрицательная, currency одна для сметы, section/workshop того же tenant/production.
+- [x] Добавить server validation: quantity неотрицательное (`readNonNegativeDecimal`, scale 3), цена неотрицательная (scale 2), section/workshop того же tenant (`BudgetSectionWorkshopNotFoundError`); currency-поля в модели нет — валюта одна имплицитно, смешивать нечего.
 - [ ] Реализовать экспорт через worker: запрос создаёт job, worker генерирует Excel/PDF из конкретной версии, сохраняет `FileAsset`, API возвращает статус; повторный запрос не блокирует HTTP request.
 - [ ] Написать unit tests decimal-расчётов и округлений, integration tests tenant scope и immutability approved version, E2E создания/редактирования/экспорта сметы.
 
@@ -158,10 +162,14 @@
 
 `WorkshopTask` содержит `budget_item_id?`, `production_id`, `workshop_id`, `assignee_membership_id?`, `status`, `deadline_at`, `completed_at`, `description`. `TaskDeadlineChange` содержит старый/новый срок, обязательный `reason`, автора и время. Связь approved budget item → task должна быть уникальной, если discovery не утвердит явное разбиение.
 
+> Предложение из `plan/idea.md` (визуальный конструктор, Инкремент 8): задача может иметь нескольких исполнителей одновременно, у каждого — свой статус выполнения (`TaskAssignee`: `task_id`, `membership_id`, `status`, `completed_at`), а начальник цеха принимает/отклоняет задачу целиком по совокупности. Это расширяет текущий контракт с одиночного `assignee_membership_id?` до массива исполнителей. Не начинать без подтверждения в `docs/OPEN_QUESTIONS.md` — влияет на role/approval матрицу и на то, как согласованная сумма Инкремента 8 считается из принятых задач.
+
 ### Шаги
 
-- [ ] Создать migrations `WorkshopTask`, `TaskDeadlineChange`, `TaskAttachment` и уникальный индекс на согласованную связь строки сметы и задачи.
-- [ ] Реализовать command «создать задачу из утверждённой позиции»: API в транзакции проверяет approved state, доступ продюсера, workshop и отсутствие дубликата; создаёт задачу и audit event.
+- [x] Создать migration `WorkshopTask` с уникальным индексом `(tenant_id, budget_item_id)` на согласованную связь строки сметы и задачи (Postgres не считает несколько `NULL` конфликтующими — задачи без привязки к смете индексу не мешают).
+- [ ] Создать migrations `TaskDeadlineChange`, `TaskAttachment` — понадобятся для шагов «перенос срока» и mobile-экрана с фото ниже, сейчас не созданы.
+- [x] Реализовать command «создать задачу из утверждённой позиции» (`POST /v1/budget-items/:budgetItemId/tasks`): проверяет approved state сметы (`WorkshopTaskBudgetNotApprovedError` → 400), workshop берётся из раздела сметы (не вводится отдельно), отсутствие дубликата (`WorkshopTaskAlreadyExistsError` → 409), создаёт задачу и audit event. Доступ — тот же `platform.admin`, что и везде в проекте (нет отдельного "доступ продюсера" — роль/approval матрица ещё не согласована, см. `docs/OPEN_QUESTIONS.md`).
+- [x] Список задач цеха: `GET /v1/organization/workshops/:workshopId/tasks` — базовый список без фильтров (фильтры «мои/срок/просрочено/статус» и mobile-экран — отдельный шаг ниже, ещё не сделан).
 - [ ] Реализовать lifecycle задачи по подписанным статусам: назначение, принятие, выполнение, закрытие. Каждый переход проверяет actor role и текущий status.
 - [ ] Реализовать перенос срока: endpoint отклоняет пустой/пробельный reason, пишет `TaskDeadlineChange`, создаёт audit event и health event при согласованном пороге.
 - [ ] Добавить список задач цеха с фильтрами «мои», «срок», «просрочено», «статус», а также mobile-first экран принятия и закрытия задачи с фото/файлом.
@@ -264,19 +272,28 @@
 
 `BudgetGraphNode` хранит `budget_version_id`, `parent_id?`, `node_type`, title, numeric amounts, position, dimensions и source template. `BudgetGraphEdge` выражает валидную directed связь. `BudgetAlternative` связывает взаимоисключающие ветви; в расчёт активной версии входит только выбранная ветвь.
 
+> Продуктовое видение из `plan/idea.md`, отражённое здесь для единого понимания (не всё ниже подтверждено discovery — см. пометки):
+> - Каждый узел уровня «цех/отдел» хранит **запланированную сумму** (вводится вручную ответственным) и показывает **согласованную сумму** — server-computed сумму `WorkshopTask`, принятых начальником цеха (тот же multi-assignee `WorkshopTask` из Инкремента 3, см. пометку там).
+> - Клик по узлу открывает drill-down: шапка узла (название + суммы), список задач цеха с карточками (исполнители, индивидуальный статус каждого, кнопки «Принято»/«Отклонено» у начальника цеха). Именно нажатие «Принято» добавляет `total` задачи в согласованную сумму узла — это и есть `WorkshopTask` lifecycle из Инкремента 3, отображённый на канвасе, а не отдельная сущность.
+> - Роли повторяют общую role/approval матрицу (`docs/OPEN_QUESTIONS.md`): admin/продюсер видит весь canvas и создаёт узлы, начальник цеха работает только в своём узле, сотрудник видит и закрывает только свои задачи.
+> - Предложенная (не подтверждённая) цветовая индикация узла: сумма принятых задач больше плана → красный (перерасход), меньше → зелёный (экономия), равна → синий (точное соответствие). Требует discovery-подтверждения допуска на «точное соответствие» и того, отдельный ли это индикатор от `productions.health_status` — см. `docs/OPEN_QUESTIONS.md`.
+
 ### Шаги
 
 - [ ] Создать migration graph entities и серверные constraints: node/version/edge одного tenant, нет self-edge, нет cycle, разрешены только уровни «production → workshop → work → material».
 - [ ] Реализовать graph commands: create node, move/resize, connect, delete, copy branch, activate alternative, create version. Каждая команда получает expected revision для optimistic concurrency.
-- [ ] Реализовать server calculation graph: обход от листьев к production, детекция цикла, сравнение двух версий/ветвей, сериализация результатов decimal-safe.
+- [ ] Реализовать server calculation graph: обход от листьев к production, детекция цикла, сравнение двух версий/ветвей, сериализация результатов decimal-safe; агрегация согласованной суммы узла из принятых `WorkshopTask` (см. контракт выше).
 - [ ] Реализовать canvas UI с pan/zoom, keyboard navigation, touch target не менее 44px, accessible textual outline и fallback table view.
+- [ ] Реализовать drill-down узла: список задач цеха, карточка задачи с исполнителями и их статусами, действия «Принято»/«Отклонено» для начальника цеха — переиспользуя `WorkshopTask` command, не дублируя lifecycle.
 - [ ] Реализовать библиотеку типовых карточек из `BudgetTemplate`; создание задачи доступно только для approved node и проходит тот же `WorkshopTask` command, что табличная смета.
+- [ ] Реализовать (после discovery-подтверждения) цветовую индикацию узла по разнице плановой и согласованной суммы; до подтверждения — нейтральный индикатор, без изобретённых порогов.
 - [ ] Написать tests cycle rejection, branch copy isolation, alternative switching, concurrent revision conflict, decimal totals и tablet interaction E2E.
 
 ### Приёмка
 
 - [ ] Пользователь собирает ветку «спектакль → цех → работа → материалы», видит сумму и сравнивает дорогой/экономный вариант.
 - [ ] Конструктор работает пальцем на планшете, а утверждённый элемент создаёт цеховую задачу без дубликата.
+- [ ] Начальник цеха принимает задачу прямо из узла на канвасе, и согласованная сумма узла обновляется без повторного похода в табличную смету.
 
 ## 12. Инкремент 9 — чаты, уведомления и поиск
 

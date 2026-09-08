@@ -1,5 +1,5 @@
 {
-  "name": "@europa/auth",
+  "name": "@kulisa/auth",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     }
   },
   "dependencies": {
-    "@europa/domain": "file:../domain"
+    "@kulisa/domain": "file:../domain"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json"

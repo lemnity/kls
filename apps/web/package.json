@@ -1,9 +1,14 @@
 {
-  "name": "@europa/web",
+  "name": "@kulisa/web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev"
+    "dev": "next dev",
+    "test:e2e": "playwright test",
+    "typecheck:e2e": "tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
   }
 }

@@ -3,7 +3,7 @@
 ## Environments
 
 - `development`: локальный Docker Compose и только синтетические данные.
-- `demo/training`: отдельный tenant «Театр Европа», без данных ТБДТ.
+- `demo/training`: отдельный tenant «Кулиса», без данных ТБДТ.
 - `staging`: изолированный контур перед пилотом.
 - `production`: выбирается театром до загрузки живых данных.
 
@@ -11,16 +11,18 @@
 
 1. Скопировать `.env.example` в `.env` и заменить значения только локальными секретами.
 2. Запустить Docker Desktop, выполнить `docker compose up -d`, дождаться healthy статуса всех сервисов.
-3. Выполнить `npm run validate --workspace @europa/db` и `npm run migrate:deploy --workspace @europa/db`.
+3. Выполнить `npm run validate --workspace @kulisa/db` и `npm run migrate:deploy --workspace @kulisa/db`.
 4. Проверить `npm test && npm run typecheck && npm run build`.
 
 Для readiness API нужны `DATABASE_URL`, `REDIS_URL` и `S3_ENDPOINT`. Локальные значения в `.env.example` соответствуют изолированным портам Compose: `5434`, `6380` и `9002`.
 
-Для synthetic demo tenant выполнить `DATABASE_URL=... npm run seed:demo --workspace @europa/db`. Команда идемпотентна и создаёт «Театр Европа», `admin@theatre-europa.example.test`, роль `theatre_admin` и тестовую permission `platform.admin`; она не создаёт пароль, session или final production permission matrix.
+Для synthetic demo tenant выполнить `DATABASE_URL=... npm run seed:demo --workspace @kulisa/db`. Команда идемпотентна и создаёт «Кулиса», пользователя `demo@demo.ru` с ролью `theatre_admin`, тестовую permission `platform.admin` и локальный demo-пароль `demo` (см. ниже); final production permission matrix и session не создаёт.
 
 ## Local pilot authentication
 
-`POST /v1/auth/login` принимает `email` и `password`, возвращает opaque bearer token и устанавливает `Cache-Control: no-store`. В PostgreSQL сохраняется только SHA-256 hash токена; password хранится только как scrypt hash. Проверка `GET /v1/session` принимает `Authorization: Bearer <token>` и создаёт контекст только для active membership. Controlled initial-admin provisioning ещё не реализован, поэтому demo seed намеренно не создаёт пароль.
+`POST /v1/auth/login` принимает `email` и `password`, возвращает opaque bearer token и устанавливает `Cache-Control: no-store`. В PostgreSQL сохраняется только SHA-256 hash токена; password хранится только как scrypt hash. Проверка `GET /v1/session` принимает `Authorization: Bearer <token>` и создаёт контекст только для active membership.
+
+Demo-логин `demo@demo.ru` / `demo` — локальный dev/demo-only shortcut, который `seed:demo` сбрасывает при каждом запуске; это не controlled initial-admin provisioning flow (см. `docs/OPEN_QUESTIONS.md`) и не должен использоваться вне изолированного development/demo-контура.
 
 ## Backup and restore
 
