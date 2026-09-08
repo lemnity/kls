@@ -6,6 +6,7 @@ import { apiFetch } from '../../lib/api.js';
 import { formatPremiereDate, healthLabel } from '../../lib/format.js';
 import { MOCK_BUDGETS, MOCK_PRODUCTIONS, type Budget, type Production } from '../../lib/mock-data.js';
 import { getSessionToken } from '../../lib/session.js';
+import { BudgetView } from './budget-view.js';
 
 type LoadResult<T> = T | 'not-found' | 'forbidden' | 'unavailable';
 
@@ -82,51 +83,6 @@ export default async function ProductionDetailPage({ params }: { params: Promise
         </div>
       </main>
     </AppShell>
-  );
-}
-
-function BudgetView({ budget }: { budget: Budget }) {
-  return (
-    <div className="budget-view">
-      <div className="budget-total">
-        <span className="muted">Итого по смете</span>
-        <strong>{budget.total} ₽</strong>
-      </div>
-      {budget.sections.length === 0 ? (
-        <p className="empty-state">В смете пока нет разделов.</p>
-      ) : (
-        budget.sections.map((section) => (
-          <section key={section.id} className="budget-section">
-            <div className="budget-section__header">
-              <h3>{section.title}</h3>
-              <span className="muted">{section.subtotal} ₽</span>
-            </div>
-            <table className="budget-items-table">
-              <thead>
-                <tr>
-                  <th scope="col">Описание</th>
-                  <th scope="col">Кол-во</th>
-                  <th scope="col">Цена</th>
-                  <th scope="col">Сумма</th>
-                </tr>
-              </thead>
-              <tbody>
-                {section.items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{item.description}</td>
-                    <td className="muted">
-                      {item.quantity} {item.unit}
-                    </td>
-                    <td className="muted">{item.unitPrice} ₽</td>
-                    <td>{item.total} ₽</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        ))
-      )}
-    </div>
   );
 }
 

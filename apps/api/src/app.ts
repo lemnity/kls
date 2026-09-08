@@ -31,6 +31,7 @@ import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
 import type { TenantContext } from '@kulisa/domain/tenant-context';
 import type { StoredRole } from '@kulisa/db/role-repository';
 import {
+  OrgUnitCycleError,
   OrgUnitParentNotFoundError,
   type OrgUnitListItem,
   type StoredOrgUnit,
@@ -96,6 +97,14 @@ export interface ApiAppOptions {
   budgetRepository?: BudgetRepository;
   workshopRepository?: WorkshopRepository;
   workshopTaskRepository?: WorkshopTaskRepository;
+  /**
+   * Enables Fastify's built-in per-request pino logging with a random
+   * correlation id (`genReqId`) and the Authorization/cookie headers
+   * redacted. Off by default so `app.inject()` in tests stays quiet.
+   * Pass `{ stream }` to send log lines to a custom destination (tests,
+   * or a log aggregator) instead of stdout.
+   */
+  requestLogging?: boolean | { stream: NodeJS.WritableStream };
 }
 
 export interface LocalPasswordAuthenticator extends SessionAuthenticator {
@@ -124,6 +133,11 @@ export interface OrganizationRepository {
       managerMembershipId?: string;
     },
   ): Promise<StoredOrgUnit>;
+  moveOrgUnit(
+    context: TenantContext,
+    orgUnitId: string,
+    newParentId: string | null,
+  ): Promise<StoredOrgUnit | null>;
   listOrgUnits(context: TenantContext): Promise<OrgUnitListItem[]>;
 }
 
@@ -368,6 +382,41 @@ class HealthController {
       }
       throw error;
     }
+  }
+
+  @Patch('v1/organization/org-units/:orgUnitId/move')
+  public async moveOrgUnit(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('orgUnitId') orgUnitId: string,
+    @Body() body: unknown,
+  ): Promise<StoredOrgUnit> {
+    const input = readMoveOrgUnitInput(body);
+    if (!input) throw new BadRequestException('Invalid move payload');
+
+    const context = await this.requirePlatformAdmin(authorization);
+    if (!this.organizationRepository) {
+      throw new ServiceUnavailableException('Organization service is not configured');
+    }
+    if (!UUID_PATTERN.test(orgUnitId)) throw new NotFoundException();
+
+    try {
+      const orgUnit = await this.organizationRepository.moveOrgUnit(context, orgUnitId, input.parentId);
+      if (!orgUnit) throw new NotFoundException();
+      return orgUnit;
+    } catch (error) {
+      throw this.mapOrgUnitMoveError(error);
+    }
+  }
+
+  private mapOrgUnitMoveError(error: unknown): Error {
+    if (error instanceof OrgUnitParentNotFoundError) {
+      return new BadRequestException('Parent org unit not found in tenant');
+    }
+    if (error instanceof OrgUnitCycleError) {
+      return new BadRequestException('Moving this org unit under the given parent would create a cycle');
+    }
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
   }
 
   @Get('v1/organization/org-units')
@@ -913,7 +962,28 @@ export async function createApiApp(
       options.workshopRepository ?? null,
       options.workshopTaskRepository ?? null,
     ),
-    new FastifyAdapter({ logger: false }),
+    new FastifyAdapter(
+      options.requestLogging
+        ? {
+            genReqId: () => randomUUID(),
+            logger: {
+              level: process.env.LOG_LEVEL ?? 'info',
+              serializers: {
+                req(request: { method: string; url: string; hostname: string; headers: unknown }) {
+                  return {
+                    method: request.method,
+                    url: request.url,
+                    hostname: request.hostname,
+                    headers: request.headers,
+                  };
+                },
+              },
+              redact: ['req.headers.authorization', 'req.headers.cookie'],
+              ...(typeof options.requestLogging === 'object' ? { stream: options.requestLogging.stream } : {}),
+            },
+          }
+        : { logger: false },
+    ),
     { logger: false },
   );
 
@@ -961,6 +1031,20 @@ function readOrgUnitInput(
     ...(parentId ? { parentId } : {}),
     ...(managerMembershipId ? { managerMembershipId } : {}),
   };
+}
+
+function readMoveOrgUnitInput(body: unknown): { parentId: string | null } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  if (!('parentId' in input)) return null;
+
+  const parentId = readNullableUuid(input.parentId);
+  return parentId === 'invalid' ? null : { parentId };
+}
+
+function readNullableUuid(value: unknown): string | null | 'invalid' {
+  if (value === null) return null;
+  return typeof value === 'string' && UUID_PATTERN.test(value) ? value : 'invalid';
 }
 
 function normalizeString(value: unknown, maxLength: number): string | null {

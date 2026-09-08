@@ -27,11 +27,28 @@ const STATUS_LABEL: Record<string, string> = {
   closed: 'Закрыта',
 };
 
-export function TaskBoard({ initialTasks, memberships }: { initialTasks: Task[]; memberships: MembershipOption[] }) {
+function isOverdue(task: Task): boolean {
+  if (!task.deadlineAt || task.status === 'completed' || task.status === 'closed') return false;
+  return new Date(task.deadlineAt).getTime() < Date.now();
+}
+
+export function TaskBoard({
+  initialTasks,
+  memberships,
+  currentMembershipId,
+}: {
+  initialTasks: Task[];
+  memberships: MembershipOption[];
+  currentMembershipId: string | null;
+}) {
   const [tasks, setTasks] = useState(initialTasks);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [rescheduleOpenId, setRescheduleOpenId] = useState<string | null>(null);
+  const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyWithDeadline, setOnlyWithDeadline] = useState(false);
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('');
 
   function updateTask(next: Task): void {
     setTasks((current) => current.map((task) => (task.id === next.id ? next : task)));
@@ -74,87 +91,140 @@ export function TaskBoard({ initialTasks, memberships }: { initialTasks: Task[];
     return <p className="empty-state">У этого цеха пока нет задач.</p>;
   }
 
+  const filteredTasks = tasks.filter((task) => {
+    if (onlyMine && task.assigneeMembershipId !== currentMembershipId) return false;
+    if (onlyWithDeadline && !task.deadlineAt) return false;
+    if (onlyOverdue && !isOverdue(task)) return false;
+    if (statusFilter && task.status !== statusFilter) return false;
+    return true;
+  });
+
   return (
-    <ul className="task-board">
-      {tasks.map((task) => (
-        <li key={task.id} className="task-row" data-testid="task-row">
-          <div className="task-row__main">
-            <span className={`status-pill status-pill--${task.status}`}>{STATUS_LABEL[task.status] ?? task.status}</span>
-            <div className="task-row__body">
-              <p className="task-row__description">{task.description}</p>
-              <p className="muted task-row__meta">{formatDeadline(task.deadlineAt)}</p>
-            </div>
-          </div>
+    <>
+      <div className="task-filters">
+        <label className="task-filter-toggle">
+          <input
+            type="checkbox"
+            checked={onlyMine}
+            disabled={!currentMembershipId}
+            onChange={(event) => setOnlyMine(event.target.checked)}
+          />
+          Мои
+        </label>
+        <label className="task-filter-toggle">
+          <input
+            type="checkbox"
+            checked={onlyWithDeadline}
+            onChange={(event) => setOnlyWithDeadline(event.target.checked)}
+          />
+          Со сроком
+        </label>
+        <label className="task-filter-toggle">
+          <input type="checkbox" checked={onlyOverdue} onChange={(event) => setOnlyOverdue(event.target.checked)} />
+          Просрочено
+        </label>
+        <label className="task-filter-select">
+          <span className="sr-only">Статус</span>
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="">Все статусы</option>
+            {Object.entries(STATUS_LABEL).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
-          <div className="task-actions">
-            {task.status === 'new' && (
-              <AssignForm
-                taskId={task.id}
-                memberships={memberships}
-                pending={pendingId === task.id}
-                onAssign={(assigneeMembershipId) =>
-                  runAction(task.id, `workshop-tasks/${task.id}/assign`, 'PATCH', { assigneeMembershipId })
-                }
-              />
-            )}
-            {task.status === 'assigned' && (
-              <button
-                type="button"
-                className="btn-pill btn-pill--accent"
-                disabled={pendingId === task.id}
-                onClick={() => runAction(task.id, `workshop-tasks/${task.id}/accept`, 'POST')}
-              >
-                Принять
-              </button>
-            )}
-            {task.status === 'accepted' && (
-              <button
-                type="button"
-                className="btn-pill btn-pill--accent"
-                disabled={pendingId === task.id}
-                onClick={() => runAction(task.id, `workshop-tasks/${task.id}/complete`, 'POST')}
-              >
-                Выполнено
-              </button>
-            )}
-            {task.status === 'completed' && (
-              <button
-                type="button"
-                className="btn-pill btn-pill--accent"
-                disabled={pendingId === task.id}
-                onClick={() => runAction(task.id, `workshop-tasks/${task.id}/close`, 'POST')}
-              >
-                Закрыть
-              </button>
-            )}
-            {task.status !== 'closed' && (
-              <button
-                type="button"
-                className="btn-pill btn-pill--ghost"
-                onClick={() => setRescheduleOpenId(rescheduleOpenId === task.id ? null : task.id)}
-              >
-                Перенести срок
-              </button>
-            )}
-          </div>
+      {filteredTasks.length === 0 ? (
+        <p className="empty-state">Ничего не найдено — измените фильтры.</p>
+      ) : (
+        <ul className="task-board">
+          {filteredTasks.map((task) => (
+            <li key={task.id} className="task-row" data-testid="task-row">
+              <div className="task-row__main">
+                <span className={`status-pill status-pill--${task.status}`}>
+                  {STATUS_LABEL[task.status] ?? task.status}
+                </span>
+                <div className="task-row__body">
+                  <p className="task-row__description">{task.description}</p>
+                  <p className={`muted task-row__meta${isOverdue(task) ? ' task-row__meta--overdue' : ''}`}>
+                    {formatDeadline(task.deadlineAt)}
+                  </p>
+                </div>
+              </div>
 
-          {rescheduleOpenId === task.id && (
-            <RescheduleForm
-              pending={pendingId === task.id}
-              onSubmit={(deadlineAt, reason) =>
-                runAction(task.id, `workshop-tasks/${task.id}/deadline`, 'PATCH', { deadlineAt, reason })
-              }
-            />
-          )}
+              <div className="task-actions">
+                {task.status === 'new' && (
+                  <AssignForm
+                    taskId={task.id}
+                    memberships={memberships}
+                    pending={pendingId === task.id}
+                    onAssign={(assigneeMembershipId) =>
+                      runAction(task.id, `workshop-tasks/${task.id}/assign`, 'PATCH', { assigneeMembershipId })
+                    }
+                  />
+                )}
+                {task.status === 'assigned' && (
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--accent"
+                    disabled={pendingId === task.id}
+                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/accept`, 'POST')}
+                  >
+                    Принять
+                  </button>
+                )}
+                {task.status === 'accepted' && (
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--accent"
+                    disabled={pendingId === task.id}
+                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/complete`, 'POST')}
+                  >
+                    Выполнено
+                  </button>
+                )}
+                {task.status === 'completed' && (
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--accent"
+                    disabled={pendingId === task.id}
+                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/close`, 'POST')}
+                  >
+                    Закрыть
+                  </button>
+                )}
+                {task.status !== 'closed' && (
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--ghost"
+                    onClick={() => setRescheduleOpenId(rescheduleOpenId === task.id ? null : task.id)}
+                  >
+                    Перенести срок
+                  </button>
+                )}
+              </div>
 
-          {errors[task.id] && (
-            <p role="alert" className="task-row__error">
-              {errors[task.id]}
-            </p>
-          )}
-        </li>
-      ))}
-    </ul>
+              {rescheduleOpenId === task.id && (
+                <RescheduleForm
+                  pending={pendingId === task.id}
+                  onSubmit={(deadlineAt, reason) =>
+                    runAction(task.id, `workshop-tasks/${task.id}/deadline`, 'PATCH', { deadlineAt, reason })
+                  }
+                />
+              )}
+
+              {errors[task.id] && (
+                <p role="alert" className="task-row__error">
+                  {errors[task.id]}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

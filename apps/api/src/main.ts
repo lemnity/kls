@@ -25,6 +25,7 @@ const localPasswordAuthenticator = new LocalPasswordAuthService({
 });
 
 const app = await createApiApp({
+  requestLogging: true,
   readinessProbes: createReadinessProbes(environment),
   localPasswordAuthenticator,
   permissionResolver: new PostgresPermissionResolver(databasePool),
