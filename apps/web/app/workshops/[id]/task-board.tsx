@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+import { CheckIcon, ClipboardIcon } from '../../icons.js';
+
 interface Task {
   id: string;
   budgetItemId: string | null;
@@ -143,6 +145,9 @@ export function TaskBoard({
           {filteredTasks.map((task) => (
             <li key={task.id} className="task-row" data-testid="task-row">
               <div className="task-row__main">
+                <i className="task-row__avatar" aria-hidden="true">
+                  <ClipboardIcon />
+                </i>
                 <span className={`status-pill status-pill--${task.status}`}>
                   {STATUS_LABEL[task.status] ?? task.status}
                 </span>
@@ -172,6 +177,7 @@ export function TaskBoard({
                     disabled={pendingId === task.id}
                     onClick={() => runAction(task.id, `workshop-tasks/${task.id}/accept`, 'POST')}
                   >
+                    <CheckIcon className="icon-inline" />
                     Принять
                   </button>
                 )}
@@ -182,6 +188,7 @@ export function TaskBoard({
                     disabled={pendingId === task.id}
                     onClick={() => runAction(task.id, `workshop-tasks/${task.id}/complete`, 'POST')}
                   >
+                    <CheckIcon className="icon-inline" />
                     Выполнено
                   </button>
                 )}
