@@ -42,9 +42,11 @@ const defaultDependencies: ReadinessDependencies = {
       socket.once('data', (data: Buffer) => {
         clearTimeout(timeout);
         socket.end();
-        data.toString() === '+PONG\r\n'
-          ? resolve()
-          : reject(new Error('Redis readiness ping failed'));
+        if (data.toString() === '+PONG\r\n') {
+          resolve();
+        } else {
+          reject(new Error('Redis readiness ping failed'));
+        }
       });
       socket.once('error', (error) => {
         clearTimeout(timeout);
