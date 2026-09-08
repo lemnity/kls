@@ -6,7 +6,6 @@ import { Body,
   ForbiddenException,
   Get,
   Header,
-  Headers,
   HttpCode,
   HttpStatus,
   Inject,
@@ -15,6 +14,7 @@ import { Body,
   Param,
   Patch,
   Post,
+  Req,
   Res,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -26,7 +26,7 @@ import {
   FastifyAdapter,
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
 import type { TenantContext } from '@kulisa/domain/tenant-context';
 import type { StoredRole } from '@kulisa/db/role-repository';
@@ -98,11 +98,13 @@ export interface ApiAppOptions {
   workshopRepository?: WorkshopRepository;
   workshopTaskRepository?: WorkshopTaskRepository;
   /**
-   * Enables Fastify's built-in per-request pino logging with a random
-   * correlation id (`genReqId`) and the Authorization/cookie headers
-   * redacted. Off by default so `app.inject()` in tests stays quiet.
-   * Pass `{ stream }` to send log lines to a custom destination (tests,
-   * or a log aggregator) instead of stdout.
+   * Enables Fastify's built-in per-request pino logging with the
+   * Authorization/cookie headers redacted (every request always gets a
+   * random correlation id via `genReqId`, independent of this flag — it
+   * is also what `TenantContext.requestId` carries). Off by default so
+   * `app.inject()` in tests stays quiet. Pass `{ stream }` to send log
+   * lines to a custom destination (tests, or a log aggregator) instead
+   * of stdout.
    */
   requestLogging?: boolean | { stream: NodeJS.WritableStream };
 }
@@ -264,7 +266,7 @@ class HealthController {
 
   @Get('v1/session')
   public async session(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<{
     requestId: string;
     userId: string;
@@ -277,8 +279,8 @@ class HealthController {
 
     try {
       return await authenticateRequest({
-        authorization,
-        requestId: randomUUID(),
+        authorization: request.headers.authorization,
+        requestId: request.id,
         authenticator: this.sessionAuthenticator,
       });
     } catch (error) {
@@ -292,7 +294,7 @@ class HealthController {
 
   @Get('v1/admin/session')
   public async adminSession(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<{
     requestId: string;
     userId: string;
@@ -304,8 +306,8 @@ class HealthController {
 
     try {
       return await authorizeRequest({
-        authorization,
-        requestId: randomUUID(),
+        authorization: request.headers.authorization,
+        requestId: request.id,
         authenticator: this.sessionAuthenticator,
         permission: 'platform.admin',
         resolver: this.permissionResolver,
@@ -324,10 +326,10 @@ class HealthController {
 
   @Get('v1/admin/roles/:roleId')
   public async role(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('roleId') roleId: string,
   ): Promise<StoredRole> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     const role = await this.roleRepository?.findById(context, roleId);
     if (!role) throw new NotFoundException();
     return role;
@@ -335,14 +337,14 @@ class HealthController {
 
   @Patch('v1/admin/roles/:roleId')
   public async renameRole(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('roleId') roleId: string,
     @Body() body: unknown,
   ): Promise<StoredRole> {
     const name = readRoleName(body);
     if (!name) throw new BadRequestException('Invalid role payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     const role = await this.roleRepository?.rename(context, roleId, name);
     if (!role) throw new NotFoundException();
     return role;
@@ -364,13 +366,13 @@ class HealthController {
 
   @Post('v1/organization/org-units')
   public async createOrgUnit(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<StoredOrgUnit> {
     const input = readOrgUnitInput(body);
     if (!input) throw new BadRequestException('Invalid org unit payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.organizationRepository) {
       throw new ServiceUnavailableException('Organization service is not configured');
     }
@@ -386,14 +388,14 @@ class HealthController {
 
   @Patch('v1/organization/org-units/:orgUnitId/move')
   public async moveOrgUnit(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('orgUnitId') orgUnitId: string,
     @Body() body: unknown,
   ): Promise<StoredOrgUnit> {
     const input = readMoveOrgUnitInput(body);
     if (!input) throw new BadRequestException('Invalid move payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.organizationRepository) {
       throw new ServiceUnavailableException('Organization service is not configured');
     }
@@ -421,9 +423,9 @@ class HealthController {
 
   @Get('v1/organization/org-units')
   public async listOrgUnits(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<OrgUnitListItem[]> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.organizationRepository) {
       throw new ServiceUnavailableException('Organization service is not configured');
     }
@@ -432,13 +434,13 @@ class HealthController {
 
   @Post('v1/organization/workshops')
   public async createWorkshop(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<StoredWorkshop> {
     const name = readWorkshopName(body);
     if (!name) throw new BadRequestException('Invalid workshop payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopRepository) {
       throw new ServiceUnavailableException('Workshop service is not configured');
     }
@@ -454,9 +456,9 @@ class HealthController {
 
   @Get('v1/organization/workshops')
   public async listWorkshops(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<StoredWorkshop[]> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopRepository) {
       throw new ServiceUnavailableException('Workshop service is not configured');
     }
@@ -465,7 +467,7 @@ class HealthController {
 
   @Post('v1/budget-items/:budgetItemId/tasks')
   public async createTaskFromBudgetItem(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('budgetItemId') budgetItemId: string,
     @Body() body: unknown,
   ): Promise<StoredWorkshopTask> {
@@ -473,7 +475,7 @@ class HealthController {
     if (!input) throw new BadRequestException('Invalid task payload');
     if (!UUID_PATTERN.test(budgetItemId)) throw new NotFoundException();
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -496,10 +498,10 @@ class HealthController {
 
   @Get('v1/organization/workshops/:workshopId/tasks')
   public async listWorkshopTasks(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('workshopId') workshopId: string,
   ): Promise<StoredWorkshopTask[]> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -510,14 +512,14 @@ class HealthController {
 
   @Patch('v1/workshop-tasks/:taskId/assign')
   public async assignWorkshopTask(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
     @Body() body: unknown,
   ): Promise<StoredWorkshopTask> {
     const assigneeMembershipId = readAssigneeMembershipId(body);
     if (!assigneeMembershipId) throw new BadRequestException('Invalid task payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -535,10 +537,10 @@ class HealthController {
   @Post('v1/workshop-tasks/:taskId/accept')
   @HttpCode(HttpStatus.OK)
   public async acceptWorkshopTask(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
   ): Promise<StoredWorkshopTask> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -556,10 +558,10 @@ class HealthController {
   @Post('v1/workshop-tasks/:taskId/complete')
   @HttpCode(HttpStatus.OK)
   public async completeWorkshopTask(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
   ): Promise<StoredWorkshopTask> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -577,10 +579,10 @@ class HealthController {
   @Post('v1/workshop-tasks/:taskId/close')
   @HttpCode(HttpStatus.OK)
   public async closeWorkshopTask(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
   ): Promise<StoredWorkshopTask> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -597,14 +599,14 @@ class HealthController {
 
   @Patch('v1/workshop-tasks/:taskId/deadline')
   public async rescheduleWorkshopTaskDeadline(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
     @Body() body: unknown,
   ): Promise<StoredWorkshopTask> {
     const input = readRescheduleInput(body);
     if (!input) throw new BadRequestException('Invalid reschedule payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
@@ -640,13 +642,13 @@ class HealthController {
 
   @Post('v1/organization/memberships')
   public async createMembership(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<StoredMembership> {
     const input = readMembershipInput(body);
     if (!input) throw new BadRequestException('Invalid membership payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.membershipRepository) {
       throw new ServiceUnavailableException('Membership service is not configured');
     }
@@ -669,10 +671,10 @@ class HealthController {
   @Delete('v1/organization/memberships/:membershipId')
   @HttpCode(HttpStatus.OK)
   public async deactivateMembership(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('membershipId') membershipId: string,
   ): Promise<StoredMembership> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.membershipRepository) {
       throw new ServiceUnavailableException('Membership service is not configured');
     }
@@ -683,9 +685,9 @@ class HealthController {
 
   @Get('v1/organization/memberships')
   public async listMemberships(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<MembershipListItem[]> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.membershipRepository) {
       throw new ServiceUnavailableException('Membership service is not configured');
     }
@@ -694,13 +696,13 @@ class HealthController {
 
   @Post('v1/productions')
   public async createProduction(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<StoredProduction> {
     const input = readProductionInput(body);
     if (!input) throw new BadRequestException('Invalid production payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.productionRepository) {
       throw new ServiceUnavailableException('Production service is not configured');
     }
@@ -716,9 +718,9 @@ class HealthController {
 
   @Get('v1/productions')
   public async listProductions(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
   ): Promise<StoredProduction[]> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.productionRepository) {
       throw new ServiceUnavailableException('Production service is not configured');
     }
@@ -727,10 +729,10 @@ class HealthController {
 
   @Get('v1/productions/:productionId')
   public async getProduction(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
   ): Promise<StoredProduction> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.productionRepository) {
       throw new ServiceUnavailableException('Production service is not configured');
     }
@@ -743,14 +745,14 @@ class HealthController {
 
   @Patch('v1/productions/:productionId')
   public async updateProduction(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
     @Body() body: unknown,
   ): Promise<StoredProduction> {
     const input = readProductionInput(body);
     if (!input) throw new BadRequestException('Invalid production payload');
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.productionRepository) {
       throw new ServiceUnavailableException('Production service is not configured');
     }
@@ -768,7 +770,7 @@ class HealthController {
 
   @Post('v1/productions/:productionId/budgets')
   public async createBudget(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
     @Body() body: unknown,
   ): Promise<StoredBudget> {
@@ -776,7 +778,7 @@ class HealthController {
     if (!input) throw new BadRequestException('Invalid budget payload');
     if (!UUID_PATTERN.test(productionId)) throw new NotFoundException();
 
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.budgetRepository) {
       throw new ServiceUnavailableException('Budget service is not configured');
     }
@@ -796,10 +798,10 @@ class HealthController {
 
   @Get('v1/budgets/:budgetId')
   public async getBudget(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('budgetId') budgetId: string,
   ): Promise<StoredBudget> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.budgetRepository) {
       throw new ServiceUnavailableException('Budget service is not configured');
     }
@@ -812,10 +814,10 @@ class HealthController {
 
   @Get('v1/productions/:productionId/budget')
   public async getBudgetByProduction(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
   ): Promise<StoredBudget> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.budgetRepository) {
       throw new ServiceUnavailableException('Budget service is not configured');
     }
@@ -829,10 +831,10 @@ class HealthController {
   @Post('v1/budgets/:budgetId/approve')
   @HttpCode(HttpStatus.OK)
   public async approveBudget(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() request: FastifyRequest,
     @Param('budgetId') budgetId: string,
   ): Promise<StoredBudget> {
-    const context = await this.requirePlatformAdmin(authorization);
+    const context = await this.requirePlatformAdmin(request);
     if (!this.budgetRepository) {
       throw new ServiceUnavailableException('Budget service is not configured');
     }
@@ -851,15 +853,15 @@ class HealthController {
   }
 
   private async requirePlatformAdmin(
-    authorization: string | undefined,
+    request: FastifyRequest,
   ): Promise<TenantContext> {
     if (!this.sessionAuthenticator) throw new UnauthorizedException();
     if (!this.permissionResolver) throw new ForbiddenException();
 
     try {
       return await authorizeRequest({
-        authorization,
-        requestId: randomUUID(),
+        authorization: request.headers.authorization,
+        requestId: request.id,
         authenticator: this.sessionAuthenticator,
         permission: 'platform.admin',
         resolver: this.permissionResolver,
@@ -962,10 +964,10 @@ export async function createApiApp(
       options.workshopRepository ?? null,
       options.workshopTaskRepository ?? null,
     ),
-    new FastifyAdapter(
-      options.requestLogging
+    new FastifyAdapter({
+      genReqId: () => randomUUID(),
+      ...(options.requestLogging
         ? {
-            genReqId: () => randomUUID(),
             logger: {
               level: process.env.LOG_LEVEL ?? 'info',
               serializers: {
@@ -982,8 +984,8 @@ export async function createApiApp(
               ...(typeof options.requestLogging === 'object' ? { stream: options.requestLogging.stream } : {}),
             },
           }
-        : { logger: false },
-    ),
+        : { logger: false }),
+    }),
     { logger: false },
   );
 
