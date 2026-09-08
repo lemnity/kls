@@ -146,3 +146,41 @@ export function TicketIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function ChevronDownIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <path d="M5.5 8.5 12 15l6.5-6.5" />
+    </svg>
+  );
+}
+
+export function SortIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className} strokeWidth={2}>
+      <path d="M7 5.5v13" />
+      <path d="M4 8.3 7 5l3 3.3" />
+      <path d="M17 18.5v-13" />
+      <path d="M14 15.7l3 3.3 3-3.3" />
+    </svg>
+  );
+}
+
+export function ClipboardIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <rect x="5.5" y="4.5" width="13" height="16" rx="2" />
+      <path d="M9 4.5V3.8A1.3 1.3 0 0 1 10.3 2.5h3.4A1.3 1.3 0 0 1 15 3.8v.7" />
+      <line x1="8.5" y1="11" x2="15.5" y2="11" />
+      <line x1="8.5" y1="15" x2="13.5" y2="15" />
+    </svg>
+  );
+}
+
+export function CheckIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className} strokeWidth={2.2}>
+      <path d="M5 12.5 9.5 17 19 6.5" />
+    </svg>
+  );
+}
