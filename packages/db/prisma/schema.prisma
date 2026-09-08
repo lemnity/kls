@@ -135,6 +135,7 @@ model Workshop {
   manager             Membership?  @relation("WorkshopManager", fields: [tenantId, managerMembershipId], references: [tenantId, id], onDelete: Restrict)
   budgetSections      BudgetSection[]
   workshopTasks       WorkshopTask[]
+  budgetGraphNodes    BudgetGraphNode[]
 
   @@unique([tenantId, name])
   @@unique([tenantId, id])
@@ -197,6 +198,7 @@ model BudgetVersion {
   budget                Budget          @relation(fields: [tenantId, budgetId], references: [tenantId, id], onDelete: Restrict)
   createdBy             Membership      @relation("BudgetVersionCreatedBy", fields: [tenantId, createdByMembershipId], references: [tenantId, id], onDelete: Restrict)
   sections              BudgetSection[]
+  graphNodes            BudgetGraphNode[]
 
   @@unique([tenantId, budgetId, revision])
   @@unique([tenantId, id])
@@ -235,6 +237,33 @@ model BudgetItem {
   @@unique([tenantId, id])
   @@index([tenantId, budgetSectionId])
   @@map("budget_items")
+}
+
+model BudgetGraphNode {
+  id              String            @id @default(uuid()) @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  budgetVersionId String            @map("budget_version_id") @db.Uuid
+  parentId        String?           @map("parent_id") @db.Uuid
+  workshopId      String?           @map("workshop_id") @db.Uuid
+  nodeType        String            @map("node_type") @db.VarChar(20)
+  title           String            @db.VarChar(200)
+  plannedAmount   Decimal           @map("planned_amount") @db.Decimal(14, 2)
+  positionX       Decimal           @map("position_x") @db.Decimal(10, 2)
+  positionY       Decimal           @map("position_y") @db.Decimal(10, 2)
+  width           Decimal           @db.Decimal(10, 2)
+  height          Decimal           @db.Decimal(10, 2)
+  revision        Int               @default(1)
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  budgetVersion   BudgetVersion     @relation(fields: [tenantId, budgetVersionId], references: [tenantId, id], onDelete: Restrict)
+  parent          BudgetGraphNode?  @relation("BudgetGraphNodeParent", fields: [tenantId, parentId], references: [tenantId, id], onDelete: Restrict)
+  children        BudgetGraphNode[] @relation("BudgetGraphNodeParent")
+  workshop        Workshop?         @relation(fields: [tenantId, workshopId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, budgetVersionId])
+  @@index([tenantId, parentId])
+  @@map("budget_graph_nodes")
 }
 
 model WorkshopTask {

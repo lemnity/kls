@@ -73,6 +73,11 @@ export default async function ProductionDetailPage({ params }: { params: Promise
           <article className="card">
             <div className="table-card__header">
               <h2>Смета</h2>
+              {budget && (
+                <Link href={`/productions/${id}/budget-graph`} className="details-link">
+                  Конструктор узлов
+                </Link>
+              )}
             </div>
             {budget ? (
               <BudgetView budget={budget} />

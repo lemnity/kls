@@ -14,6 +14,7 @@ import { Body,
   Param,
   Patch,
   Post,
+  Query,
   Req,
   Res,
   ServiceUnavailableException,
@@ -72,6 +73,17 @@ import {
   type CreateTaskFromBudgetItemInput,
   type StoredWorkshopTask,
 } from '@kulisa/db/workshop-task-repository';
+import {
+  BudgetGraphCycleError,
+  BudgetGraphInvalidHierarchyError,
+  BudgetGraphNodeNotFoundError,
+  BudgetGraphRevisionConflictError,
+  BudgetGraphVersionNotFoundError,
+  BudgetGraphWorkshopNotFoundError,
+  type BudgetGraphNodeType,
+  type CreateBudgetGraphNodeInput,
+  type StoredBudgetGraphNode,
+} from '@kulisa/db/budget-graph-repository';
 
 import {
   SessionAuthorizationError,
@@ -98,6 +110,7 @@ export interface ApiAppOptions {
   budgetRepository?: BudgetRepository;
   workshopRepository?: WorkshopRepository;
   workshopTaskRepository?: WorkshopTaskRepository;
+  budgetGraphRepository?: BudgetGraphRepository;
   /**
    * Enables Fastify's built-in per-request pino logging with the
    * Authorization/cookie headers redacted (every request always gets a
@@ -211,6 +224,32 @@ export interface WorkshopTaskRepository {
   ): Promise<StoredWorkshopTask | null>;
 }
 
+export interface BudgetGraphRepository {
+  createNode(
+    context: TenantContext,
+    budgetVersionId: string,
+    input: CreateBudgetGraphNodeInput,
+  ): Promise<StoredBudgetGraphNode>;
+  listNodes(context: TenantContext, budgetVersionId: string): Promise<StoredBudgetGraphNode[]>;
+  moveNode(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+    layout: { positionX: string; positionY: string; width: string; height: string },
+  ): Promise<StoredBudgetGraphNode | null>;
+  reparentNode(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+    newParentId: string | null,
+  ): Promise<StoredBudgetGraphNode | null>;
+  deleteNode(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+  ): Promise<{ deletedIds: string[] } | null>;
+}
+
 const READINESS_PROBES = Symbol('READINESS_PROBES');
 const SESSION_AUTHENTICATOR = Symbol('SESSION_AUTHENTICATOR');
 const LOCAL_PASSWORD_AUTHENTICATOR = Symbol('LOCAL_PASSWORD_AUTHENTICATOR');
@@ -222,6 +261,7 @@ const PRODUCTION_REPOSITORY = Symbol('PRODUCTION_REPOSITORY');
 const BUDGET_REPOSITORY = Symbol('BUDGET_REPOSITORY');
 const WORKSHOP_REPOSITORY = Symbol('WORKSHOP_REPOSITORY');
 const WORKSHOP_TASK_REPOSITORY = Symbol('WORKSHOP_TASK_REPOSITORY');
+const BUDGET_GRAPH_REPOSITORY = Symbol('BUDGET_GRAPH_REPOSITORY');
 
 @Controller()
 class HealthController {
@@ -248,6 +288,8 @@ class HealthController {
     private readonly workshopRepository: WorkshopRepository | null,
     @Inject(WORKSHOP_TASK_REPOSITORY)
     private readonly workshopTaskRepository: WorkshopTaskRepository | null,
+    @Inject(BUDGET_GRAPH_REPOSITORY)
+    private readonly budgetGraphRepository: BudgetGraphRepository | null,
   ) {}
 
   @Get('health')
@@ -952,6 +994,141 @@ class HealthController {
     return error instanceof Error ? error : new Error(String(error));
   }
 
+  @Post('v1/budget-versions/:budgetVersionId/graph-nodes')
+  public async createBudgetGraphNode(
+    @Req() request: FastifyRequest,
+    @Param('budgetVersionId') budgetVersionId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetGraphNode> {
+    const input = readCreateGraphNodeInput(body);
+    if (!input) throw new BadRequestException('Invalid graph node payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(budgetVersionId)) throw new NotFoundException();
+
+    try {
+      return await this.budgetGraphRepository.createNode(context, budgetVersionId, input);
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
+  @Get('v1/budget-versions/:budgetVersionId/graph-nodes')
+  public async listBudgetGraphNodes(
+    @Req() request: FastifyRequest,
+    @Param('budgetVersionId') budgetVersionId: string,
+  ): Promise<StoredBudgetGraphNode[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(budgetVersionId)) return [];
+
+    return this.budgetGraphRepository.listNodes(context, budgetVersionId);
+  }
+
+  @Patch('v1/budget-graph-nodes/:nodeId/layout')
+  public async moveBudgetGraphNode(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetGraphNode> {
+    const input = readGraphNodeLayoutInput(body);
+    if (!input) throw new BadRequestException('Invalid layout payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const node = await this.budgetGraphRepository.moveNode(context, nodeId, input.expectedRevision, input);
+      if (!node) throw new NotFoundException();
+      return node;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
+  @Patch('v1/budget-graph-nodes/:nodeId/parent')
+  public async reparentBudgetGraphNode(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetGraphNode> {
+    const input = readGraphNodeReparentInput(body);
+    if (!input) throw new BadRequestException('Invalid reparent payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const node = await this.budgetGraphRepository.reparentNode(
+        context,
+        nodeId,
+        input.expectedRevision,
+        input.parentId,
+      );
+      if (!node) throw new NotFoundException();
+      return node;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
+  @Delete('v1/budget-graph-nodes/:nodeId')
+  @HttpCode(HttpStatus.OK)
+  public async deleteBudgetGraphNode(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Query('expectedRevision') expectedRevisionRaw: string | undefined,
+  ): Promise<{ deletedIds: string[] }> {
+    const expectedRevision = readPositiveInteger(Number(expectedRevisionRaw));
+    if (expectedRevision === null) throw new BadRequestException('Invalid or missing expectedRevision');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const result = await this.budgetGraphRepository.deleteNode(context, nodeId, expectedRevision);
+      if (!result) throw new NotFoundException();
+      return result;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
+  private mapBudgetGraphError(error: unknown): Error {
+    if (error instanceof BudgetGraphVersionNotFoundError) return new NotFoundException();
+    if (error instanceof BudgetGraphNodeNotFoundError) {
+      return new BadRequestException('Referenced graph node not found in tenant');
+    }
+    if (error instanceof BudgetGraphWorkshopNotFoundError) {
+      return new BadRequestException('Workshop not found in tenant');
+    }
+    if (error instanceof BudgetGraphInvalidHierarchyError) {
+      return new BadRequestException('Node type does not match its parent level');
+    }
+    if (error instanceof BudgetGraphCycleError) {
+      return new BadRequestException('This change would create a cycle in the budget graph');
+    }
+    if (error instanceof BudgetGraphRevisionConflictError) {
+      return new ConflictException('Node was changed by someone else — reload and try again');
+    }
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   private async requirePlatformAdmin(
     request: FastifyRequest,
   ): Promise<TenantContext> {
@@ -994,6 +1171,7 @@ function createApiModule(
   budgetRepository: BudgetRepository | null,
   workshopRepository: WorkshopRepository | null,
   workshopTaskRepository: WorkshopTaskRepository | null,
+  budgetGraphRepository: BudgetGraphRepository | null,
 ): DynamicModule {
   return {
     module: ApiModule,
@@ -1043,6 +1221,10 @@ function createApiModule(
         provide: WORKSHOP_TASK_REPOSITORY,
         useValue: workshopTaskRepository,
       },
+      {
+        provide: BUDGET_GRAPH_REPOSITORY,
+        useValue: budgetGraphRepository,
+      },
     ],
   };
 }
@@ -1063,6 +1245,7 @@ export async function createApiApp(
       options.budgetRepository ?? null,
       options.workshopRepository ?? null,
       options.workshopTaskRepository ?? null,
+      options.budgetGraphRepository ?? null,
     ),
     new FastifyAdapter({
       genReqId: () => randomUUID(),
@@ -1273,11 +1456,87 @@ function readNullableIsoDate(value: unknown): string | null | 'invalid' {
 }
 
 const NON_NEGATIVE_DECIMAL_PATTERN = /^\d+(\.\d+)?$/;
+const SIGNED_DECIMAL_PATTERN = /^-?\d+(\.\d+)?$/;
 
 function readNonNegativeDecimal(value: unknown, maxScale: number): string | null {
   if (typeof value !== 'string' || !NON_NEGATIVE_DECIMAL_PATTERN.test(value)) return null;
   const [, fraction = ''] = value.split('.');
   return fraction.length <= maxScale ? value : null;
+}
+
+function readSignedDecimal(value: unknown, maxScale: number): string | null {
+  if (typeof value !== 'string' || !SIGNED_DECIMAL_PATTERN.test(value)) return null;
+  const [, fraction = ''] = value.split('.');
+  return fraction.length <= maxScale ? value : null;
+}
+
+const NODE_TYPES: readonly BudgetGraphNodeType[] = ['production', 'workshop', 'work', 'material'];
+
+function readNodeType(value: unknown): BudgetGraphNodeType | null {
+  return typeof value === 'string' && (NODE_TYPES as readonly string[]).includes(value)
+    ? (value as BudgetGraphNodeType)
+    : null;
+}
+
+function readCreateGraphNodeInput(body: unknown): CreateBudgetGraphNodeInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const nodeType = readNodeType(input.nodeType);
+  const title = normalizeString(input.title, 200);
+  const plannedAmount = readNonNegativeDecimal(input.plannedAmount, 2);
+  const parentId = readOptionalUuid(input.parentId);
+  const workshopId = readOptionalUuid(input.workshopId);
+  const positionX = readSignedDecimal(input.positionX, 2);
+  const positionY = readSignedDecimal(input.positionY, 2);
+  const width = readNonNegativeDecimal(input.width, 2);
+  const height = readNonNegativeDecimal(input.height, 2);
+  if (
+    !nodeType || !title || plannedAmount === null || parentId === null || workshopId === null ||
+    positionX === null || positionY === null || width === null || height === null
+  ) {
+    return null;
+  }
+  return {
+    nodeType,
+    title,
+    plannedAmount,
+    positionX,
+    positionY,
+    width,
+    height,
+    ...(parentId ? { parentId } : {}),
+    ...(workshopId ? { workshopId } : {}),
+  };
+}
+
+function readGraphNodeLayoutInput(
+  body: unknown,
+): { expectedRevision: number; positionX: string; positionY: string; width: string; height: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const expectedRevision = readPositiveInteger(input.expectedRevision);
+  const positionX = readSignedDecimal(input.positionX, 2);
+  const positionY = readSignedDecimal(input.positionY, 2);
+  const width = readNonNegativeDecimal(input.width, 2);
+  const height = readNonNegativeDecimal(input.height, 2);
+  if (expectedRevision === null || positionX === null || positionY === null || width === null || height === null) {
+    return null;
+  }
+  return { expectedRevision, positionX, positionY, width, height };
+}
+
+function readGraphNodeReparentInput(body: unknown): { expectedRevision: number; parentId: string | null } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  if (!('parentId' in input)) return null;
+  const expectedRevision = readPositiveInteger(input.expectedRevision);
+  const parentId = readNullableUuid(input.parentId);
+  if (expectedRevision === null || parentId === 'invalid') return null;
+  return { expectedRevision, parentId };
+}
+
+function readPositiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function readCreateBudgetInput(body: unknown): { sections: BudgetSectionInput[] } | null {

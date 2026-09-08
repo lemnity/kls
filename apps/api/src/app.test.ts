@@ -20,6 +20,10 @@ import {
 } from '@kulisa/db/budget-repository';
 import { WorkshopManagerNotFoundError, WorkshopNameAlreadyExistsError } from '@kulisa/db/workshop-repository';
 import {
+  BudgetGraphCycleError,
+  BudgetGraphRevisionConflictError,
+} from '@kulisa/db/budget-graph-repository';
+import {
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
@@ -2557,5 +2561,242 @@ describe('request logging', () => {
     );
     expect(requestLine).toBeDefined();
     expect((requestLine!.req as { headers: Record<string, unknown> }).headers.authorization).toBe('[Redacted]');
+  });
+});
+
+describe('budget graph', () => {
+  const authenticator: SessionAuthenticator = {
+    async authenticate() {
+      return {
+        userId: 'user-a',
+        membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+      };
+    },
+  };
+  const versionId = '11111111-1111-4111-8111-111111111111';
+  const nodeId = '22222222-2222-4222-8222-222222222222';
+  const layoutPayload = { positionX: '10.00', positionY: '20.00', width: '160.00', height: '80.00' };
+  const storedNode = {
+    id: nodeId,
+    budgetVersionId: versionId,
+    parentId: null,
+    workshopId: null,
+    nodeType: 'production',
+    title: 'Ревизор',
+    plannedAmount: '0.00',
+    subtreeTotal: '0.00',
+    positionX: '0.00',
+    positionY: '0.00',
+    width: '160.00',
+    height: '80.00',
+    revision: 1,
+  };
+
+  it('rejects unauthenticated access to every graph node endpoint', async () => {
+    const app = await createApiApp();
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-versions/${versionId}/graph-nodes`,
+        payload: { nodeType: 'production', title: 'X', plannedAmount: '0.00', ...layoutPayload },
+      });
+      const list = await app.inject({ method: 'GET', url: `/v1/budget-versions/${versionId}/graph-nodes` });
+      const move = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/layout`,
+        payload: { expectedRevision: 1, ...layoutPayload },
+      });
+      const reparent = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/parent`,
+        payload: { expectedRevision: 1, parentId: null },
+      });
+      const del = await app.inject({
+        method: 'DELETE',
+        url: `/v1/budget-graph-nodes/${nodeId}?expectedRevision=1`,
+      });
+
+      expect(create.statusCode).toBe(401);
+      expect(list.statusCode).toBe(401);
+      expect(move.statusCode).toBe(401);
+      expect(reparent.statusCode).toBe(401);
+      expect(del.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates a graph node and lists it', async () => {
+    const createCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async createNode(context: unknown, budgetVersionId: unknown, input: unknown) {
+          createCalls.push({ context, budgetVersionId, input });
+          return storedNode;
+        },
+        async listNodes() {
+          return [storedNode];
+        },
+      },
+    } as never);
+
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-versions/${versionId}/graph-nodes`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { nodeType: 'production', title: 'Ревизор', plannedAmount: '0.00', ...layoutPayload },
+      });
+      const list = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-versions/${versionId}/graph-nodes`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toEqual(storedNode);
+      expect(list.statusCode).toBe(200);
+      expect(list.json()).toEqual([storedNode]);
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        budgetVersionId: versionId,
+        input: { nodeType: 'production', title: 'Ревизор', plannedAmount: '0.00', ...layoutPayload },
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an invalid node type and a root node with a parentId', async () => {
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+    });
+
+    try {
+      const invalidType = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-versions/${versionId}/graph-nodes`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { nodeType: 'not-a-type', title: 'X', plannedAmount: '0.00', ...layoutPayload },
+      });
+      const negativeAmount = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-versions/${versionId}/graph-nodes`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { nodeType: 'production', title: 'X', plannedAmount: '-5.00', ...layoutPayload },
+      });
+
+      expect(invalidType.statusCode).toBe(400);
+      expect(negativeAmount.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('moves a node, mapping a revision conflict to 409 and an unknown node to 404', async () => {
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async moveNode(_context: unknown, id: string, expectedRevision: number) {
+          if (id === nodeId && expectedRevision === 1) return { ...storedNode, ...layoutPayload, revision: 2 };
+          if (id === nodeId) throw new BudgetGraphRevisionConflictError(nodeId, expectedRevision);
+          return null;
+        },
+      },
+    } as never);
+
+    try {
+      const moved = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/layout`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1, ...layoutPayload },
+      });
+      const conflict = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/layout`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 99, ...layoutPayload },
+      });
+      const notFound = await app.inject({
+        method: 'PATCH',
+        url: '/v1/budget-graph-nodes/33333333-3333-4333-8333-333333333333/layout',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1, ...layoutPayload },
+      });
+
+      expect(moved.statusCode).toBe(200);
+      expect(moved.json()).toMatchObject({ revision: 2 });
+      expect(conflict.statusCode).toBe(409);
+      expect(notFound.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reparents a node, mapping a cycle to 400', async () => {
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async reparentNode() {
+          throw new BudgetGraphCycleError(nodeId, '44444444-4444-4444-8444-444444444444');
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/parent`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1, parentId: '44444444-4444-4444-8444-444444444444' },
+      });
+
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('deletes a node cascade and requires expectedRevision as a query parameter', async () => {
+    const deleteCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async deleteNode(context: unknown, id: unknown, expectedRevision: unknown) {
+          deleteCalls.push({ context, id, expectedRevision });
+          return { deletedIds: [nodeId, '55555555-5555-4555-8555-555555555555'] };
+        },
+      },
+    } as never);
+
+    try {
+      const missingRevision = await app.inject({
+        method: 'DELETE',
+        url: `/v1/budget-graph-nodes/${nodeId}`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: `/v1/budget-graph-nodes/${nodeId}?expectedRevision=3`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(missingRevision.statusCode).toBe(400);
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({ deletedIds: expect.arrayContaining([nodeId]) });
+      expect(deleteCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: nodeId, expectedRevision: 3 },
+      ]);
+    } finally {
+      await app.close();
+    }
   });
 });

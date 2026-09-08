@@ -35,6 +35,10 @@
     "./workshop-task-repository": {
       "types": "./dist/postgres-workshop-task-repository.d.ts",
       "default": "./dist/postgres-workshop-task-repository.js"
+    },
+    "./budget-graph-repository": {
+      "types": "./dist/postgres-budget-graph-repository.d.ts",
+      "default": "./dist/postgres-budget-graph-repository.js"
     }
   },
   "scripts": {

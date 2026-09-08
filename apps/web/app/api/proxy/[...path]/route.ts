@@ -20,8 +20,9 @@ async function handle(
 
   const { path } = await params;
   const hasBody = request.method !== 'GET' && request.method !== 'DELETE';
+  const search = new URL(request.url).search;
 
-  const response = await apiFetch(`/v1/${path.join('/')}`, {
+  const response = await apiFetch(`/v1/${path.join('/')}${search}`, {
     method: request.method,
     token,
     headers: hasBody ? { 'content-type': 'application/json' } : {},
