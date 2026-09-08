@@ -9,6 +9,7 @@ import { PostgresProductionRepository } from '@kulisa/db/production-repository';
 import { PostgresBudgetRepository } from '@kulisa/db/budget-repository';
 import { PostgresWorkshopRepository } from '@kulisa/db/workshop-repository';
 import { PostgresWorkshopTaskRepository } from '@kulisa/db/workshop-task-repository';
+import { PostgresBudgetGraphRepository } from '@kulisa/db/budget-graph-repository';
 import { PostgresRoleRepository } from '@kulisa/db/role-repository';
 import { Pool } from 'pg';
 
@@ -36,6 +37,7 @@ const app = await createApiApp({
   budgetRepository: new PostgresBudgetRepository(databasePool),
   workshopRepository: new PostgresWorkshopRepository(databasePool),
   workshopTaskRepository: new PostgresWorkshopTaskRepository(databasePool),
+  budgetGraphRepository: new PostgresBudgetGraphRepository(databasePool),
 });
 app.addHook('onClose', async () => databasePool.end());
 await app.listen({ host, port });
