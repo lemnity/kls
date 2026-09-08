@@ -24,6 +24,22 @@
 
 Demo-логин `demo@demo.ru` / `demo` — локальный dev/demo-only shortcut, который `seed:demo` сбрасывает при каждом запуске; это не controlled initial-admin provisioning flow (см. `docs/OPEN_QUESTIONS.md`) и не должен использоваться вне изолированного development/demo-контура.
 
+## Migrations
+
+Каждая migration проверяется на чистой БД перед merge; откат — через restore резервной копии, снятой до применения новой migration (Prisma migrate не генерирует автоматические down-migrations).
+
+2026-09-08 выполнена измеренная проверка на изолированной scratch-БД (локальный Postgres, не project Docker Compose — тот же procedure применим к нему один в один, различается только `DATABASE_URL`):
+
+1. `DATABASE_URL=... npm run migrate:deploy --workspace @kulisa/db` на чистой БД применил все 6 текущих migration без ошибок; `migrate:status` подтвердил актуальную схему.
+2. `DATABASE_URL=... npm run seed:demo --workspace @kulisa/db` создал synthetic demo tenant поверх мигрированной схемы (staging-like data).
+3. Снят backup: `pg_dump -Fc -f staging_copy.dump` (62 KB, ~0.2 сек) — это и есть «резервная копия staging-данных» из §1 плана, снятая после применения текущих migration и перед гипотетической следующей.
+4. Симулирован инцидент: `DROP DATABASE` + `CREATE DATABASE` (чистая БД).
+5. Rollback: `pg_restore -d <db> staging_copy.dump` — 3.2 секунды, без ошибок.
+6. Проверка: `migrate:status` после restore снова подтвердил актуальную схему (все 6 migration); построчные counts всех 21 таблицы (`tenants`, `users`, `memberships`, `roles`, `permissions`, `role_permissions`, `password_credentials`, остальные — по фактическим данным) совпали до и после restore; identity-данные (`tenants.name = 'Кулиса'`, `users.email = 'demo@demo.ru'`) сверены точечно.
+7. Scratch-БД и dump удалены после проверки.
+
+Наблюдаемые локальные метрики: migration apply на чистой БД — без измеримой задержки (<1 сек на 6 migration); backup 62 KB — 0.2 сек; restore — 3.2 сек. Это не production RTO — не проверены object storage, сетевая передача backup и реальный объём staging-данных.
+
 ## Backup and restore
 
 Ежедневный backup PostgreSQL и inventory object storage обязательны до пилота. Backup хранится отдельно от рабочей VM/volume и шифруется. Restore drill выполняется в чистом staging-контуре: восстановить БД/файлы, проверить checksum выборки assets и вход demo пользователя.
