@@ -74,7 +74,35 @@ export const MOCK_BUDGETS: Record<string, Budget> = {
           { id: 'item-2', description: 'Молнии', quantity: '6.000', unit: 'шт', unitPrice: '85.00', total: '510.00' },
         ],
       },
+      {
+        id: 'section-2',
+        workshopId: 'workshop-2',
+        title: 'Бутафорский цех',
+        subtotal: '1200.00',
+        items: [
+          { id: 'item-3', description: 'Реквизит', quantity: '4.000', unit: 'шт', unitPrice: '300.00', total: '1200.00' },
+        ],
+      },
     ],
-    total: '6135.00',
+    total: '7335.00',
+  },
+  'prod-2': {
+    id: 'budget-prod-2',
+    productionId: 'prod-2',
+    status: 'APPROVED',
+    versionId: 'version-prod-2',
+    revision: 1,
+    sections: [
+      {
+        id: 'section-3',
+        workshopId: 'workshop-1',
+        title: 'Пошивочный цех',
+        subtotal: '2000.00',
+        items: [
+          { id: 'item-4', description: 'Ткань лён', quantity: '10.000', unit: 'м', unitPrice: '200.00', total: '2000.00' },
+        ],
+      },
+    ],
+    total: '2000.00',
   },
 };

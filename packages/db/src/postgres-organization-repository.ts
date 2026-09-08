@@ -26,6 +26,16 @@ export class OrgUnitParentNotFoundError extends Error {
   }
 }
 
+export class OrgUnitCycleError extends Error {
+  public constructor(
+    public readonly orgUnitId: string,
+    public readonly newParentId: string,
+  ) {
+    super(`Moving org unit ${orgUnitId} under ${newParentId} would create a cycle`);
+    this.name = 'OrgUnitCycleError';
+  }
+}
+
 export class PostgresOrganizationRepository {
   public constructor(private readonly client: SqlClient) {}
 
@@ -77,6 +87,58 @@ export class PostgresOrganizationRepository {
       throw new OrgUnitParentNotFoundError(input.parentId!);
     }
     return orgUnit;
+  }
+
+  public async moveOrgUnit(
+    context: TenantContext,
+    orgUnitId: string,
+    newParentId: string | null,
+  ): Promise<StoredOrgUnit | null> {
+    const existing = await this.client.query<{ parentId: string | null }>(
+      'SELECT parent_id AS "parentId" FROM org_units WHERE id = $1 AND tenant_id = $2',
+      [orgUnitId, context.tenantId],
+    );
+    const current = existing.rows[0];
+    if (!current) return null;
+
+    if (newParentId !== null) {
+      if (newParentId === orgUnitId) throw new OrgUnitCycleError(orgUnitId, newParentId);
+
+      const check = await this.client.query<{ parentExists: boolean; isDescendant: boolean }>(
+        `WITH RECURSIVE ancestors AS (
+           SELECT id, parent_id FROM org_units WHERE id = $1 AND tenant_id = $2
+           UNION ALL
+           SELECT o.id, o.parent_id FROM org_units o
+           JOIN ancestors a ON o.id = a.parent_id
+           WHERE o.tenant_id = $2
+         )
+         SELECT
+           EXISTS (SELECT 1 FROM org_units WHERE id = $1 AND tenant_id = $2) AS "parentExists",
+           EXISTS (SELECT 1 FROM ancestors WHERE id = $3) AS "isDescendant"`,
+        [newParentId, context.tenantId, orgUnitId],
+      );
+      const result = check.rows[0]!;
+      if (!result.parentExists) throw new OrgUnitParentNotFoundError(newParentId);
+      if (result.isDescendant) throw new OrgUnitCycleError(orgUnitId, newParentId);
+    }
+
+    const updated = await this.client.query<StoredOrgUnit>(
+      `WITH updated AS (
+         UPDATE org_units
+         SET parent_id = $3::uuid, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, name, type
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $4, $2, $5, 'org_unit.moved', 'org_unit', id,
+           jsonb_build_object('oldParentId', $6::uuid, 'newParentId', $3::uuid)
+         FROM updated
+       )
+       SELECT id, name, type FROM updated`,
+      [orgUnitId, context.tenantId, newParentId, randomUUID(), context.membershipId, current.parentId],
+    );
+
+    return updated.rows[0]!;
   }
 
   public async listOrgUnits(context: TenantContext): Promise<OrgUnitListItem[]> {

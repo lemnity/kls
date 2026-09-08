@@ -4,6 +4,7 @@ import { Client } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  OrgUnitCycleError,
   OrgUnitParentNotFoundError,
   PostgresOrganizationRepository,
 } from './postgres-organization-repository.js';
@@ -124,6 +125,104 @@ describeIntegration('PostgresOrganizationRepository', () => {
     await expect(
       client.query("SELECT count(*)::int AS count FROM org_units WHERE tenant_id = $1", [tenantA.tenantId]),
     ).resolves.toMatchObject({ rows: [{ count: 0 }] });
+  });
+
+  it('moves an org unit to a new parent and records an audit event with old and new parent', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+
+    const oldParent = await repository.createOrgUnit(context, { name: 'Production', type: 'department' });
+    const newParent = await repository.createOrgUnit(context, { name: 'Costume department', type: 'department' });
+    const child = await repository.createOrgUnit(context, {
+      name: 'Scenic workshop',
+      type: 'workshop',
+      parentId: oldParent.id,
+    });
+
+    const moved = await repository.moveOrgUnit(context, child.id, newParent.id);
+
+    expect(moved).toMatchObject({ id: child.id, name: 'Scenic workshop', type: 'workshop' });
+    await expect(
+      client.query('SELECT parent_id FROM org_units WHERE id = $1', [child.id]),
+    ).resolves.toMatchObject({ rows: [{ parent_id: newParent.id }] });
+    await expect(
+      client.query(
+        "SELECT changes FROM audit_events WHERE action = 'org_unit.moved' AND subject_id = $1",
+        [child.id],
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ changes: { oldParentId: oldParent.id, newParentId: newParent.id } }],
+    });
+  });
+
+  it('moves an org unit to the root when parentId is null', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+
+    const parent = await repository.createOrgUnit(context, { name: 'Production', type: 'department' });
+    const child = await repository.createOrgUnit(context, {
+      name: 'Scenic workshop',
+      type: 'workshop',
+      parentId: parent.id,
+    });
+
+    await repository.moveOrgUnit(context, child.id, null);
+
+    await expect(
+      client.query('SELECT parent_id FROM org_units WHERE id = $1', [child.id]),
+    ).resolves.toMatchObject({ rows: [{ parent_id: null }] });
+  });
+
+  it('returns null when moving an org unit not in the tenant', async () => {
+    const tenantA = await createTenantMembership(client, 'Tenant A');
+    const tenantB = await createTenantMembership(client, 'Tenant B');
+    const repository = new PostgresOrganizationRepository(client);
+    const foreignUnit = await repository.createOrgUnit(tenantB, { name: 'Foreign', type: 'department' });
+
+    await expect(repository.moveOrgUnit(tenantA, foreignUnit.id, null)).resolves.toBeNull();
+  });
+
+  it('rejects moving an org unit under itself', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+    const unit = await repository.createOrgUnit(context, { name: 'Production', type: 'department' });
+
+    await expect(repository.moveOrgUnit(context, unit.id, unit.id)).rejects.toBeInstanceOf(OrgUnitCycleError);
+  });
+
+  it('rejects moving an org unit under its own descendant', async () => {
+    const context = await createTenantMembership(client, 'Tenant A');
+    const repository = new PostgresOrganizationRepository(client);
+    const grandparent = await repository.createOrgUnit(context, { name: 'Production', type: 'department' });
+    const parent = await repository.createOrgUnit(context, {
+      name: 'Costume department',
+      type: 'department',
+      parentId: grandparent.id,
+    });
+    const child = await repository.createOrgUnit(context, {
+      name: 'Scenic workshop',
+      type: 'workshop',
+      parentId: parent.id,
+    });
+
+    await expect(repository.moveOrgUnit(context, grandparent.id, child.id)).rejects.toBeInstanceOf(
+      OrgUnitCycleError,
+    );
+    await expect(
+      client.query('SELECT parent_id FROM org_units WHERE id = $1', [grandparent.id]),
+    ).resolves.toMatchObject({ rows: [{ parent_id: null }] });
+  });
+
+  it('rejects moving an org unit under a parent from another tenant', async () => {
+    const tenantA = await createTenantMembership(client, 'Tenant A');
+    const tenantB = await createTenantMembership(client, 'Tenant B');
+    const repository = new PostgresOrganizationRepository(client);
+    const unit = await repository.createOrgUnit(tenantA, { name: 'Production', type: 'department' });
+    const foreignParent = await repository.createOrgUnit(tenantB, { name: 'Foreign', type: 'department' });
+
+    await expect(repository.moveOrgUnit(tenantA, unit.id, foreignParent.id)).rejects.toBeInstanceOf(
+      OrgUnitParentNotFoundError,
+    );
   });
 
   it('lists org units scoped to the tenant, ordered by name', async () => {

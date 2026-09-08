@@ -1,9 +1,11 @@
+import { Writable } from 'node:stream';
+
 import { describe, expect, it } from 'vitest';
 
 import { createApiApp } from './app.js';
 import type { SessionAuthenticator } from './session.js';
 import type { PermissionResolver } from '@kulisa/domain/permission-authorizer';
-import { OrgUnitParentNotFoundError } from '@kulisa/db/organization-repository';
+import { OrgUnitCycleError, OrgUnitParentNotFoundError } from '@kulisa/db/organization-repository';
 import {
   MembershipAlreadyExistsError,
   MembershipRoleNotFoundError,
@@ -229,6 +231,180 @@ describe('API health endpoints', () => {
           type: 'workshop',
           parentId: '11111111-1111-4111-8111-111111111111',
         },
+      });
+
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unauthenticated org-unit move', async () => {
+    const app = await createApiApp();
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/org-units/11111111-1111-4111-8111-111111111111/move',
+        payload: { parentId: null },
+      });
+
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('moves an org unit to a new parent within the tenant', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const orgUnitId = '33333333-3333-4333-8333-333333333333';
+    const newParentId = '11111111-1111-4111-8111-111111111111';
+    const moveCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      organizationRepository: {
+        async createOrgUnit() {
+          throw new Error('not used in this test');
+        },
+        async listOrgUnits() {
+          return [];
+        },
+        async moveOrgUnit(context: unknown, movedOrgUnitId: unknown, movedNewParentId: unknown) {
+          moveCalls.push({ context, orgUnitId: movedOrgUnitId, newParentId: movedNewParentId });
+          return { id: orgUnitId, name: 'Scenic workshop', type: 'workshop' };
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/v1/organization/org-units/${orgUnitId}/move`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { parentId: newParentId },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ id: orgUnitId, name: 'Scenic workshop', type: 'workshop' });
+      expect(moveCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a', membershipId: 'membership-a' }),
+        orgUnitId,
+        newParentId,
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('returns 404 when the moved org unit is not in the tenant', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      organizationRepository: {
+        async createOrgUnit() {
+          throw new Error('not used in this test');
+        },
+        async listOrgUnits() {
+          return [];
+        },
+        async moveOrgUnit() {
+          return null;
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/org-units/33333333-3333-4333-8333-333333333333/move',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { parentId: null },
+      });
+
+      expect(response.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an org-unit move that would create a cycle', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      organizationRepository: {
+        async createOrgUnit() {
+          throw new Error('not used in this test');
+        },
+        async listOrgUnits() {
+          return [];
+        },
+        async moveOrgUnit() {
+          throw new OrgUnitCycleError(
+            '33333333-3333-4333-8333-333333333333',
+            '44444444-4444-4444-8444-444444444444',
+          );
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/org-units/33333333-3333-4333-8333-333333333333/move',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { parentId: '44444444-4444-4444-8444-444444444444' },
+      });
+
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an org-unit move payload missing the parentId key', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/organization/org-units/org-unit-a/move',
+        headers: { authorization: 'Bearer token-a' },
+        payload: {},
       });
 
       expect(response.statusCode).toBe(400);
@@ -1952,5 +2128,68 @@ describe('API health endpoints', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('request logging', () => {
+  it('stays silent by default so app.inject() in tests does not emit log lines', async () => {
+    const app = await createApiApp();
+
+    try {
+      expect(app.log.level).toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('logs a per-request correlation id and redacts the Authorization header when enabled', async () => {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(chunk.toString());
+        callback();
+      },
+    });
+    const authenticator: SessionAuthenticator = {
+      async authenticate(accessToken) {
+        return accessToken === 'super-secret-token'
+          ? {
+              userId: 'user-1',
+              membership: { id: 'membership-1', tenantId: 'tenant-a', userId: 'user-1', isActive: true },
+            }
+          : null;
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      requestLogging: { stream },
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/v1/session',
+        headers: { authorization: 'Bearer super-secret-token' },
+      });
+      expect(response.statusCode).toBe(200);
+    } finally {
+      await app.close();
+    }
+
+    const logged = chunks.join('\n');
+    const lines = logged
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    expect(logged).not.toContain('super-secret-token');
+    const withReqId = lines.filter((line) => typeof line.reqId === 'string' && line.reqId.length > 0);
+    expect(withReqId.length).toBeGreaterThan(0);
+
+    const requestLine = lines.find(
+      (line) => (line.req as Record<string, unknown> | undefined)?.headers !== undefined,
+    );
+    expect(requestLine).toBeDefined();
+    expect((requestLine!.req as { headers: Record<string, unknown> }).headers.authorization).toBe('[Redacted]');
   });
 });

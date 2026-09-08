@@ -895,8 +895,36 @@ a.rail-icon {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--color-border);
+}
+
+.budget-total__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-filter select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
+.budget-section__summary {
+  font-size: 0.85rem;
+}
+
+.budget-approved-note {
+  font-size: 0.82rem;
+  color: var(--color-text-soft);
+  border-top: 1px solid var(--color-border);
+  padding-top: 14px;
 }
 
 .budget-total strong {
@@ -1068,4 +1096,36 @@ a.rail-icon {
   width: 100%;
   color: var(--color-danger);
   font-size: 0.82rem;
+}
+
+.task-row__meta--overdue {
+  color: var(--color-danger);
+  font-weight: 700;
+}
+
+.task-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-bottom: 16px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.task-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text-soft);
+}
+
+.task-filter-select select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: 6px 10px;
+  font-size: 0.85rem;
 }

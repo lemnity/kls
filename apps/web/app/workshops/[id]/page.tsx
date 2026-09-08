@@ -28,7 +28,11 @@ export default async function WorkshopDetailPage({ params }: { params: Promise<{
   const token = await getSessionToken();
   if (!token) redirect('/login');
 
-  const [tasks, memberships] = await Promise.all([loadTasks(id, token), loadMemberships(token)]);
+  const [tasks, memberships, currentMembershipId] = await Promise.all([
+    loadTasks(id, token),
+    loadMemberships(token),
+    loadCurrentMembershipId(token),
+  ]);
   if (tasks === 'unavailable' || memberships === 'unavailable') {
     return (
       <main className="shell-message">
@@ -55,7 +59,7 @@ export default async function WorkshopDetailPage({ params }: { params: Promise<{
         </section>
 
         <article className="card">
-          <TaskBoard initialTasks={tasks} memberships={memberships} />
+          <TaskBoard initialTasks={tasks} memberships={memberships} currentMembershipId={currentMembershipId} />
         </article>
       </main>
     </AppShell>
@@ -76,4 +80,12 @@ async function loadMemberships(token: string): Promise<MembershipOption[] | 'una
   if (!response.ok) return 'unavailable';
 
   return (await response.json()) as MembershipOption[];
+}
+
+async function loadCurrentMembershipId(token: string): Promise<string | null> {
+  const response = await apiFetch('/v1/session', { token });
+  if (!response.ok) return null;
+
+  const session = (await response.json()) as { membershipId: string };
+  return session.membershipId;
 }
