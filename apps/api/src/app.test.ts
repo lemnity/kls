@@ -413,6 +413,73 @@ describe('API health endpoints', () => {
     }
   });
 
+  it('rejects unauthenticated org-unit deactivation', async () => {
+    const app = await createApiApp();
+
+    try {
+      const response = await app.inject({
+        method: 'DELETE',
+        url: '/v1/organization/org-units/11111111-1111-4111-8111-111111111111',
+      });
+
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('deactivates an org unit within the tenant and 404s for an unknown one', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const orgUnitId = '33333333-3333-4333-8333-333333333333';
+    const deactivateCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      organizationRepository: {
+        async createOrgUnit() {
+          throw new Error('not used in this test');
+        },
+        async listOrgUnits() {
+          return [];
+        },
+        async deactivateOrgUnit(context: unknown, id: unknown) {
+          deactivateCalls.push({ context, id });
+          return id === orgUnitId ? { id: orgUnitId, name: 'Пошивочный цех', type: 'workshop' } : null;
+        },
+      },
+    } as never);
+
+    try {
+      const deactivated = await app.inject({
+        method: 'DELETE',
+        url: `/v1/organization/org-units/${orgUnitId}`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const notFound = await app.inject({
+        method: 'DELETE',
+        url: '/v1/organization/org-units/44444444-4444-4444-8444-444444444444',
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(deactivated.statusCode).toBe(200);
+      expect(deactivated.json()).toEqual({ id: orgUnitId, name: 'Пошивочный цех', type: 'workshop' });
+      expect(notFound.statusCode).toBe(404);
+      expect(deactivateCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: orgUnitId },
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: '44444444-4444-4444-8444-444444444444' },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects unauthenticated org-unit list retrieval', async () => {
     const app = await createApiApp();
 

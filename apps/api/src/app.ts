@@ -141,6 +141,7 @@ export interface OrganizationRepository {
     orgUnitId: string,
     newParentId: string | null,
   ): Promise<StoredOrgUnit | null>;
+  deactivateOrgUnit(context: TenantContext, orgUnitId: string): Promise<StoredOrgUnit | null>;
   listOrgUnits(context: TenantContext): Promise<OrgUnitListItem[]>;
 }
 
@@ -428,6 +429,23 @@ class HealthController {
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
+  }
+
+  @Delete('v1/organization/org-units/:orgUnitId')
+  @HttpCode(HttpStatus.OK)
+  public async deactivateOrgUnit(
+    @Req() request: FastifyRequest,
+    @Param('orgUnitId') orgUnitId: string,
+  ): Promise<StoredOrgUnit> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.organizationRepository) {
+      throw new ServiceUnavailableException('Organization service is not configured');
+    }
+    if (!UUID_PATTERN.test(orgUnitId)) throw new NotFoundException();
+
+    const orgUnit = await this.organizationRepository.deactivateOrgUnit(context, orgUnitId);
+    if (!orgUnit) throw new NotFoundException();
+    return orgUnit;
   }
 
   @Get('v1/organization/org-units')

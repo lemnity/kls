@@ -141,6 +141,25 @@ export class PostgresOrganizationRepository {
     return updated.rows[0]!;
   }
 
+  public async deactivateOrgUnit(context: TenantContext, orgUnitId: string): Promise<StoredOrgUnit | null> {
+    const result = await this.client.query<StoredOrgUnit>(
+      `WITH updated AS (
+         UPDATE org_units
+         SET is_active = false, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2 AND is_active = true
+         RETURNING id, name, type
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'org_unit.deactivated', 'org_unit', id, '{}'::jsonb
+         FROM updated
+       )
+       SELECT id, name, type FROM updated`,
+      [orgUnitId, context.tenantId, randomUUID(), context.membershipId],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
   public async listOrgUnits(context: TenantContext): Promise<OrgUnitListItem[]> {
     const result = await this.client.query<OrgUnitListItem>(
       `SELECT id, name, type, parent_id AS "parentId", is_active AS "isActive"
