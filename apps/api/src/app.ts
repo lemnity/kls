@@ -58,6 +58,7 @@ import {
   type StoredBudget,
 } from '@kulisa/db/budget-repository';
 import {
+  WorkshopManagerNotFoundError,
   WorkshopNameAlreadyExistsError,
   type StoredWorkshop,
 } from '@kulisa/db/workshop-repository';
@@ -174,7 +175,15 @@ export interface BudgetRepository {
 }
 
 export interface WorkshopRepository {
-  createWorkshop(context: TenantContext, input: { name: string }): Promise<StoredWorkshop>;
+  createWorkshop(
+    context: TenantContext,
+    input: { name: string; managerMembershipId?: string },
+  ): Promise<StoredWorkshop>;
+  assignWorkshopManager(
+    context: TenantContext,
+    workshopId: string,
+    managerMembershipId: string | null,
+  ): Promise<StoredWorkshop | null>;
   listWorkshops(context: TenantContext): Promise<StoredWorkshop[]>;
 }
 
@@ -437,21 +446,57 @@ class HealthController {
     @Req() request: FastifyRequest,
     @Body() body: unknown,
   ): Promise<StoredWorkshop> {
-    const name = readWorkshopName(body);
-    if (!name) throw new BadRequestException('Invalid workshop payload');
+    const input = readWorkshopInput(body);
+    if (!input) throw new BadRequestException('Invalid workshop payload');
 
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopRepository) {
       throw new ServiceUnavailableException('Workshop service is not configured');
     }
     try {
-      return await this.workshopRepository.createWorkshop(context, { name });
+      return await this.workshopRepository.createWorkshop(context, input);
     } catch (error) {
-      if (error instanceof WorkshopNameAlreadyExistsError) {
-        throw new ConflictException('Workshop with this name already exists in tenant');
-      }
-      throw error;
+      throw this.mapWorkshopManagerError(error);
     }
+  }
+
+  @Patch('v1/organization/workshops/:workshopId/manager')
+  public async assignWorkshopManager(
+    @Req() request: FastifyRequest,
+    @Param('workshopId') workshopId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshop> {
+    const input = readAssignWorkshopManagerInput(body);
+    if (!input) throw new BadRequestException('Invalid manager assignment payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopRepository) {
+      throw new ServiceUnavailableException('Workshop service is not configured');
+    }
+    if (!UUID_PATTERN.test(workshopId)) throw new NotFoundException();
+
+    try {
+      const workshop = await this.workshopRepository.assignWorkshopManager(
+        context,
+        workshopId,
+        input.managerMembershipId,
+      );
+      if (!workshop) throw new NotFoundException();
+      return workshop;
+    } catch (error) {
+      throw this.mapWorkshopManagerError(error);
+    }
+  }
+
+  private mapWorkshopManagerError(error: unknown): Error {
+    if (error instanceof WorkshopNameAlreadyExistsError) {
+      return new ConflictException('Workshop with this name already exists in tenant');
+    }
+    if (error instanceof WorkshopManagerNotFoundError) {
+      return new BadRequestException('Manager membership not found in tenant');
+    }
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
   }
 
   @Get('v1/organization/workshops')
@@ -1055,9 +1100,22 @@ function normalizeString(value: unknown, maxLength: number): string | null {
   return normalized.length > 0 && normalized.length <= maxLength ? normalized : null;
 }
 
-function readWorkshopName(body: unknown): string | null {
+function readWorkshopInput(body: unknown): { name: string; managerMembershipId?: string } | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-  return normalizeString((body as Record<string, unknown>).name, 200);
+  const input = body as Record<string, unknown>;
+  const name = normalizeString(input.name, 200);
+  const managerMembershipId = readOptionalUuid(input.managerMembershipId);
+  if (!name || managerMembershipId === null) return null;
+  return { name, ...(managerMembershipId ? { managerMembershipId } : {}) };
+}
+
+function readAssignWorkshopManagerInput(body: unknown): { managerMembershipId: string | null } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  if (!('managerMembershipId' in input)) return null;
+
+  const managerMembershipId = readNullableUuid(input.managerMembershipId);
+  return managerMembershipId === 'invalid' ? null : { managerMembershipId };
 }
 
 function readCreateTaskInput(body: unknown): {
