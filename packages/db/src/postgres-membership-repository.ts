@@ -12,6 +12,14 @@ export interface StoredMembership {
   status: 'ACTIVE' | 'INACTIVE';
 }
 
+export interface MembershipListItem {
+  id: string;
+  userId: string;
+  userEmail: string;
+  roleId: string | null;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
 export class MembershipUserNotFoundError extends Error {
   public constructor(public readonly userId: string) {
     super(`User ${userId} not found`);
@@ -111,5 +119,18 @@ export class PostgresMembershipRepository {
     );
 
     return result.rows[0] ?? null;
+  }
+
+  public async listMemberships(context: TenantContext): Promise<MembershipListItem[]> {
+    const result = await this.client.query<MembershipListItem>(
+      `SELECT m.id, m.user_id AS "userId", u.email AS "userEmail", m.role_id AS "roleId", m.status
+       FROM memberships m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.tenant_id = $1
+       ORDER BY u.email ASC, m.id ASC`,
+      [context.tenantId],
+    );
+
+    return result.rows;
   }
 }

@@ -22,6 +22,8 @@ import {
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
+  WorkshopTaskClosedError,
+  WorkshopTaskInvalidTransitionError,
 } from '@kulisa/db/workshop-task-repository';
 
 describe('API health endpoints', () => {
@@ -572,6 +574,380 @@ describe('API health endpoints', () => {
     }
   });
 
+  it('rejects unauthenticated task transitions', async () => {
+    const app = await createApiApp();
+    const taskId = '11111111-1111-4111-8111-111111111111';
+
+    try {
+      const assign = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/assign`,
+        payload: { assigneeMembershipId: taskId },
+      });
+      const accept = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/accept` });
+      const complete = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/complete` });
+      const close = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/close` });
+
+      expect(assign.statusCode).toBe(401);
+      expect(accept.statusCode).toBe(401);
+      expect(complete.statusCode).toBe(401);
+      expect(close.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('walks a task through assign, accept, complete and close', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const taskId = '11111111-1111-4111-8111-111111111111';
+    const assigneeId = '22222222-2222-4222-8222-222222222222';
+    const baseTask = {
+      id: taskId,
+      budgetItemId: 'item-a',
+      productionId: 'production-a',
+      workshopId: 'workshop-a',
+      assigneeMembershipId: null as string | null,
+      status: 'new',
+      description: 'Сшить костюм',
+      deadlineAt: null,
+      completedAt: null as string | null,
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskFromBudgetItem() {
+          throw new Error('not used in this test');
+        },
+        async listTasksByWorkshop() {
+          return [];
+        },
+        async assignTask(_: unknown, id: string, assigneeMembershipId: string) {
+          return { ...baseTask, status: 'assigned', assigneeMembershipId };
+        },
+        async acceptTask() {
+          return { ...baseTask, status: 'accepted', assigneeMembershipId: assigneeId };
+        },
+        async completeTask() {
+          return { ...baseTask, status: 'completed', assigneeMembershipId: assigneeId, completedAt: '2026-09-08T00:00:00Z' };
+        },
+        async closeTask() {
+          return { ...baseTask, status: 'closed', assigneeMembershipId: assigneeId, completedAt: '2026-09-08T00:00:00Z' };
+        },
+      },
+    } as never);
+
+    try {
+      const assign = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/assign`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { assigneeMembershipId: assigneeId },
+      });
+      const accept = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/accept`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const complete = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/complete`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const close = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/close`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(assign.statusCode).toBe(200);
+      expect(assign.json()).toMatchObject({ status: 'assigned', assigneeMembershipId: assigneeId });
+      expect(accept.statusCode).toBe(200);
+      expect(accept.json()).toMatchObject({ status: 'accepted' });
+      expect(complete.statusCode).toBe(200);
+      expect(complete.json()).toMatchObject({ status: 'completed', completedAt: '2026-09-08T00:00:00Z' });
+      expect(close.statusCode).toBe(200);
+      expect(close.json()).toMatchObject({ status: 'closed' });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('maps task transition errors and unknown tasks to the matching HTTP status', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const wrongStatusId = '11111111-1111-4111-8111-111111111111';
+    const unknownAssigneeId = '22222222-2222-4222-8222-222222222222';
+    const missingId = '33333333-3333-4333-8333-333333333333';
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskFromBudgetItem() {
+          throw new Error('not used in this test');
+        },
+        async listTasksByWorkshop() {
+          return [];
+        },
+        async assignTask(_: unknown, id: string, assigneeMembershipId: string) {
+          if (id === missingId) return null;
+          if (assigneeMembershipId === unknownAssigneeId) throw new WorkshopTaskAssigneeNotFoundError(unknownAssigneeId);
+          throw new WorkshopTaskInvalidTransitionError(id, 'new', 'assigned');
+        },
+        async acceptTask(_: unknown, id: string) {
+          if (id === missingId) return null;
+          throw new WorkshopTaskInvalidTransitionError(id, 'assigned', 'new');
+        },
+        async completeTask() {
+          throw new Error('not used in this test');
+        },
+        async closeTask() {
+          throw new Error('not used in this test');
+        },
+      },
+    } as never);
+
+    try {
+      const invalidTransition = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { assigneeMembershipId: wrongStatusId },
+      });
+      const unknownAssignee = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { assigneeMembershipId: unknownAssigneeId },
+      });
+      const assignMissing = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${missingId}/assign`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { assigneeMembershipId: wrongStatusId },
+      });
+      const acceptInvalid = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${wrongStatusId}/accept`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const invalidPayload = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { assigneeMembershipId: 'not-a-uuid' },
+      });
+
+      expect(invalidTransition.statusCode).toBe(409);
+      expect(unknownAssignee.statusCode).toBe(400);
+      expect(assignMissing.statusCode).toBe(404);
+      expect(acceptInvalid.statusCode).toBe(409);
+      expect(invalidPayload.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unauthenticated deadline reschedule', async () => {
+    const app = await createApiApp();
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/v1/workshop-tasks/11111111-1111-4111-8111-111111111111/deadline',
+        payload: { deadlineAt: '2026-12-24', reason: 'причина' },
+      });
+
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects a reschedule payload with a missing reason or deadlineAt key', async () => {
+    const app = await createApiApp();
+    const taskId = '11111111-1111-4111-8111-111111111111';
+
+    try {
+      const missingReason = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/deadline`,
+        payload: { deadlineAt: '2026-12-24' },
+      });
+      const missingDeadlineKey = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/deadline`,
+        payload: { reason: '  ' },
+      });
+
+      expect(missingReason.statusCode).toBe(400);
+      expect(missingDeadlineKey.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('reschedules a task deadline, allows clearing it to null', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const taskId = '11111111-1111-4111-8111-111111111111';
+    const rescheduleCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskFromBudgetItem() {
+          throw new Error('not used in this test');
+        },
+        async listTasksByWorkshop() {
+          return [];
+        },
+        async assignTask() {
+          throw new Error('not used in this test');
+        },
+        async acceptTask() {
+          throw new Error('not used in this test');
+        },
+        async completeTask() {
+          throw new Error('not used in this test');
+        },
+        async closeTask() {
+          throw new Error('not used in this test');
+        },
+        async rescheduleTaskDeadline(context: unknown, id: string, deadlineAt: string | null, reason: string) {
+          rescheduleCalls.push({ context, id, deadlineAt, reason });
+          return {
+            id,
+            budgetItemId: 'item-a',
+            productionId: 'production-a',
+            workshopId: 'workshop-a',
+            assigneeMembershipId: null,
+            status: 'new',
+            description: 'Сшить костюм',
+            deadlineAt,
+            completedAt: null,
+          };
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/deadline`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { deadlineAt: '2026-12-24', reason: 'Поставщик задержал ткань' },
+      });
+      const cleared = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/deadline`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { deadlineAt: null, reason: 'Дедлайн больше не актуален' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ deadlineAt: '2026-12-24' });
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json()).toMatchObject({ deadlineAt: null });
+      expect(rescheduleCalls).toEqual([
+        {
+          context: expect.objectContaining({ tenantId: 'tenant-a', membershipId: 'membership-a' }),
+          id: taskId,
+          deadlineAt: '2026-12-24',
+          reason: 'Поставщик задержал ткань',
+        },
+        {
+          context: expect.objectContaining({ tenantId: 'tenant-a', membershipId: 'membership-a' }),
+          id: taskId,
+          deadlineAt: null,
+          reason: 'Дедлайн больше не актуален',
+        },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('maps a closed-task reschedule to 409 and an unknown task to 404', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const closedId = '11111111-1111-4111-8111-111111111111';
+    const missingId = '22222222-2222-4222-8222-222222222222';
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskFromBudgetItem() {
+          throw new Error('not used in this test');
+        },
+        async listTasksByWorkshop() {
+          return [];
+        },
+        async assignTask() {
+          throw new Error('not used in this test');
+        },
+        async acceptTask() {
+          throw new Error('not used in this test');
+        },
+        async completeTask() {
+          throw new Error('not used in this test');
+        },
+        async closeTask() {
+          throw new Error('not used in this test');
+        },
+        async rescheduleTaskDeadline(_: unknown, id: string) {
+          if (id === missingId) return null;
+          throw new WorkshopTaskClosedError(id);
+        },
+      },
+    } as never);
+
+    try {
+      const closed = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${closedId}/deadline`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { deadlineAt: '2026-12-24', reason: 'причина' },
+      });
+      const missing = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${missingId}/deadline`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { deadlineAt: '2026-12-24', reason: 'причина' },
+      });
+
+      expect(closed.statusCode).toBe(409);
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('rejects unauthenticated membership creation and deactivation', async () => {
     const app = await createApiApp();
 
@@ -766,6 +1142,57 @@ describe('API health endpoints', () => {
       expect(found.statusCode).toBe(200);
       expect(found.json()).toEqual({ id: 'membership-a', userId: 'user-b', roleId: null, status: 'INACTIVE' });
       expect(notFound.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unauthenticated membership listing and returns the tenant list', async () => {
+    const unauthApp = await createApiApp();
+
+    try {
+      const response = await unauthApp.inject({ method: 'GET', url: '/v1/organization/memberships' });
+      expect(response.statusCode).toBe(401);
+    } finally {
+      await unauthApp.close();
+    }
+
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const memberships = [
+      { id: 'membership-a', userId: 'user-a', userEmail: 'admin@example.test', roleId: 'role-a', status: 'ACTIVE' },
+    ];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      membershipRepository: {
+        async createMembership() {
+          throw new Error('not used in this test');
+        },
+        async deactivateMembership() {
+          throw new Error('not used in this test');
+        },
+        async listMemberships() {
+          return memberships;
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/v1/organization/memberships',
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(memberships);
     } finally {
       await app.close();
     }

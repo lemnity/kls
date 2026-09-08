@@ -54,6 +54,24 @@ export class WorkshopTaskAssigneeNotFoundError extends Error {
   }
 }
 
+export class WorkshopTaskInvalidTransitionError extends Error {
+  public constructor(
+    public readonly taskId: string,
+    public readonly expectedStatus: string,
+    public readonly actualStatus: string,
+  ) {
+    super(`Task ${taskId} is '${actualStatus}', expected '${expectedStatus}' for this transition`);
+    this.name = 'WorkshopTaskInvalidTransitionError';
+  }
+}
+
+export class WorkshopTaskClosedError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} is closed and cannot be modified`);
+    this.name = 'WorkshopTaskClosedError';
+  }
+}
+
 const TASK_COLUMNS = `id, budget_item_id AS "budgetItemId", production_id AS "productionId",
            workshop_id AS "workshopId", assignee_membership_id AS "assigneeMembershipId",
            status, description, to_char(deadline_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "deadlineAt",
@@ -147,5 +165,165 @@ export class PostgresWorkshopTaskRepository {
     );
 
     return result.rows;
+  }
+
+  public async assignTask(
+    context: TenantContext,
+    taskId: string,
+    assigneeMembershipId: string,
+  ): Promise<StoredWorkshopTask | null> {
+    const current = await this.requireCurrentStatus(context, taskId, 'new');
+    if (current === null) return null;
+
+    const assignee = await this.client.query(
+      'SELECT 1 FROM memberships WHERE id = $1 AND tenant_id = $2',
+      [assigneeMembershipId, context.tenantId],
+    );
+    if ((assignee.rowCount ?? 0) === 0) throw new WorkshopTaskAssigneeNotFoundError(assigneeMembershipId);
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET status = 'assigned', assignee_membership_id = $3, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, budget_item_id, production_id, workshop_id, assignee_membership_id,
+           status, description, deadline_at, completed_at
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $4, $2, $5, 'workshop_task.assigned', 'workshop_task', id, '{}'::jsonb
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, assigneeMembershipId, randomUUID(), context.membershipId],
+    );
+
+    return result.rows[0]!;
+  }
+
+  public async acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
+    const current = await this.requireCurrentStatus(context, taskId, 'assigned');
+    if (current === null) return null;
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET status = 'accepted', updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, budget_item_id, production_id, workshop_id, assignee_membership_id,
+           status, description, deadline_at, completed_at
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'workshop_task.accepted', 'workshop_task', id, '{}'::jsonb
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, randomUUID(), context.membershipId],
+    );
+
+    return result.rows[0]!;
+  }
+
+  public async completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
+    const current = await this.requireCurrentStatus(context, taskId, 'accepted');
+    if (current === null) return null;
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, budget_item_id, production_id, workshop_id, assignee_membership_id,
+           status, description, deadline_at, completed_at
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'workshop_task.completed', 'workshop_task', id, '{}'::jsonb
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, randomUUID(), context.membershipId],
+    );
+
+    return result.rows[0]!;
+  }
+
+  public async closeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
+    const current = await this.requireCurrentStatus(context, taskId, 'completed');
+    if (current === null) return null;
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET status = 'closed', updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, budget_item_id, production_id, workshop_id, assignee_membership_id,
+           status, description, deadline_at, completed_at
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'workshop_task.closed', 'workshop_task', id, '{}'::jsonb
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, randomUUID(), context.membershipId],
+    );
+
+    return result.rows[0]!;
+  }
+
+  public async rescheduleTaskDeadline(
+    context: TenantContext,
+    taskId: string,
+    newDeadlineAt: string | null,
+    reason: string,
+  ): Promise<StoredWorkshopTask | null> {
+    const existing = await this.client.query<{ status: string }>(
+      'SELECT status FROM workshop_tasks WHERE id = $1 AND tenant_id = $2',
+      [taskId, context.tenantId],
+    );
+    const current = existing.rows[0];
+    if (!current) return null;
+    if (current.status === 'closed') throw new WorkshopTaskClosedError(taskId);
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET deadline_at = $3::timestamptz, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING id, budget_item_id, production_id, workshop_id, assignee_membership_id,
+           status, description, deadline_at, completed_at
+       ), change_logged AS (
+         INSERT INTO task_deadline_changes (
+           id, tenant_id, workshop_task_id, old_deadline_at, new_deadline_at, reason, actor_membership_id
+         )
+         SELECT $6, $2, $1, t.deadline_at, updated.deadline_at, $4, $5
+         FROM workshop_tasks t, updated
+         WHERE t.id = $1 AND t.tenant_id = $2
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $7, $2, $5, 'workshop_task.deadline_changed', 'workshop_task', id,
+           jsonb_build_object('reason', $4)
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, newDeadlineAt, reason, context.membershipId, randomUUID(), randomUUID()],
+    );
+
+    return result.rows[0]!;
+  }
+
+  private async requireCurrentStatus(
+    context: TenantContext,
+    taskId: string,
+    expectedStatus: string,
+  ): Promise<string | null> {
+    const result = await this.client.query<{ status: string }>(
+      'SELECT status FROM workshop_tasks WHERE id = $1 AND tenant_id = $2',
+      [taskId, context.tenantId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    if (row.status !== expectedStatus) {
+      throw new WorkshopTaskInvalidTransitionError(taskId, expectedStatus, row.status);
+    }
+    return row.status;
   }
 }
