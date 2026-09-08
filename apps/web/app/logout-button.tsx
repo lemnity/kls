@@ -14,9 +14,8 @@ export function LogoutButton() {
   }
 
   return (
-    <button type="button" className="btn-pill btn-pill--ghost logout-button" onClick={handleClick}>
-      <LogoutIcon className="icon-inline" />
-      Выйти
+    <button type="button" className="icon-chip icon-chip--logout" onClick={handleClick} aria-label="Выйти">
+      <LogoutIcon />
     </button>
   );
 }

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../app-shell.js';
+import { LayersIcon, TicketIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
 import { formatPremiereDate, healthLabel } from '../../lib/format.js';
 import { MOCK_BUDGETS, MOCK_PRODUCTIONS, type Budget, type Production } from '../../lib/mock-data.js';
@@ -43,7 +44,12 @@ export default async function ProductionDetailPage({ params }: { params: Promise
         <div className="detail-grid">
           <article className="card">
             <div className="table-card__header">
-              <h2>Сведения</h2>
+              <div className="donut-card__header-text">
+                <span className="stat-card__icon">
+                  <LayersIcon />
+                </span>
+                <h2>Сведения</h2>
+              </div>
             </div>
             <dl className="meta-list">
               <div>
@@ -72,7 +78,12 @@ export default async function ProductionDetailPage({ params }: { params: Promise
 
           <article className="card">
             <div className="table-card__header">
-              <h2>Смета</h2>
+              <div className="donut-card__header-text">
+                <span className="stat-card__icon">
+                  <TicketIcon />
+                </span>
+                <h2>Смета</h2>
+              </div>
               {budget && (
                 <Link href={`/productions/${id}/budget-graph`} className="details-link">
                   Конструктор узлов

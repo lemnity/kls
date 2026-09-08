@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../app-shell.js';
+import { ClipboardIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
 import { getSessionToken } from '../../lib/session.js';
 import { TaskBoard } from './task-board.js';
@@ -59,6 +60,14 @@ export default async function WorkshopDetailPage({ params }: { params: Promise<{
         </section>
 
         <article className="card">
+          <div className="table-card__header">
+            <div className="donut-card__header-text">
+              <span className="stat-card__icon">
+                <ClipboardIcon />
+              </span>
+              <h2>Очередь задач</h2>
+            </div>
+          </div>
           <TaskBoard initialTasks={tasks} memberships={memberships} currentMembershipId={currentMembershipId} />
         </article>
       </main>
