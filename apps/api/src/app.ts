@@ -64,14 +64,21 @@ import {
   type StoredWorkshop,
 } from '@kulisa/db/workshop-repository';
 import {
+  WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
   WorkshopTaskClosedError,
+  WorkshopTaskGraphNodeNotFoundError,
+  WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
+  type CreateTaskForGraphNodeInput,
   type CreateTaskFromBudgetItemInput,
+  type StoredTaskAssignee,
   type StoredWorkshopTask,
+  type StoredWorkshopTaskWithAssignees,
+  type TaskLeadDecision,
 } from '@kulisa/db/workshop-task-repository';
 import {
   BudgetGraphCycleError,
@@ -84,6 +91,12 @@ import {
   type CreateBudgetGraphNodeInput,
   type StoredBudgetGraphNode,
 } from '@kulisa/db/budget-graph-repository';
+import {
+  NodeAttachmentNodeNotFoundError,
+  NodeAttachmentNotFoundError,
+  type CreateAttachmentUploadInput,
+  type StoredNodeAttachment,
+} from '@kulisa/db/node-attachment-repository';
 
 import {
   SessionAuthorizationError,
@@ -111,6 +124,7 @@ export interface ApiAppOptions {
   workshopRepository?: WorkshopRepository;
   workshopTaskRepository?: WorkshopTaskRepository;
   budgetGraphRepository?: BudgetGraphRepository;
+  nodeAttachmentRepository?: NodeAttachmentRepository;
   /**
    * Enables Fastify's built-in per-request pino logging with the
    * Authorization/cookie headers redacted (every request always gets a
@@ -222,6 +236,29 @@ export interface WorkshopTaskRepository {
     newDeadlineAt: string | null,
     reason: string,
   ): Promise<StoredWorkshopTask | null>;
+  createTaskForGraphNode(
+    context: TenantContext,
+    graphNodeId: string,
+    input: CreateTaskForGraphNodeInput,
+  ): Promise<StoredWorkshopTaskWithAssignees>;
+  listGraphNodeTasks(context: TenantContext, graphNodeId: string): Promise<StoredWorkshopTaskWithAssignees[]>;
+  markAssigneeDone(context: TenantContext, taskId: string, membershipId: string): Promise<StoredTaskAssignee | null>;
+  recordLeadDecision(
+    context: TenantContext,
+    taskId: string,
+    decision: TaskLeadDecision,
+  ): Promise<StoredWorkshopTaskWithAssignees | null>;
+}
+
+export interface NodeAttachmentRepository {
+  createUploadTarget(
+    context: TenantContext,
+    nodeId: string,
+    input: CreateAttachmentUploadInput,
+  ): Promise<{ attachment: StoredNodeAttachment; uploadUrl: string }>;
+  listAttachments(context: TenantContext, nodeId: string): Promise<StoredNodeAttachment[]>;
+  getDownloadUrl(context: TenantContext, nodeId: string, attachmentId: string): Promise<string | null>;
+  deleteAttachment(context: TenantContext, nodeId: string, attachmentId: string): Promise<boolean>;
 }
 
 export interface BudgetGraphRepository {
@@ -268,6 +305,7 @@ const BUDGET_REPOSITORY = Symbol('BUDGET_REPOSITORY');
 const WORKSHOP_REPOSITORY = Symbol('WORKSHOP_REPOSITORY');
 const WORKSHOP_TASK_REPOSITORY = Symbol('WORKSHOP_TASK_REPOSITORY');
 const BUDGET_GRAPH_REPOSITORY = Symbol('BUDGET_GRAPH_REPOSITORY');
+const NODE_ATTACHMENT_REPOSITORY = Symbol('NODE_ATTACHMENT_REPOSITORY');
 
 @Controller()
 class HealthController {
@@ -296,6 +334,8 @@ class HealthController {
     private readonly workshopTaskRepository: WorkshopTaskRepository | null,
     @Inject(BUDGET_GRAPH_REPOSITORY)
     private readonly budgetGraphRepository: BudgetGraphRepository | null,
+    @Inject(NODE_ATTACHMENT_REPOSITORY)
+    private readonly nodeAttachmentRepository: NodeAttachmentRepository | null,
   ) {}
 
   @Get('health')
@@ -742,6 +782,89 @@ class HealthController {
     }
   }
 
+  @Post('v1/budget-graph-nodes/:nodeId/tasks')
+  public async createGraphNodeTask(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTaskWithAssignees> {
+    const input = readCreateGraphNodeTaskInput(body);
+    if (!input) throw new BadRequestException('Invalid task payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      return await this.workshopTaskRepository.createTaskForGraphNode(context, nodeId, input);
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Get('v1/budget-graph-nodes/:nodeId/tasks')
+  public async listGraphNodeTasks(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+  ): Promise<StoredWorkshopTaskWithAssignees[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) return [];
+
+    return this.workshopTaskRepository.listGraphNodeTasks(context, nodeId);
+  }
+
+  @Post('v1/workshop-tasks/:taskId/assignees/:membershipId/done')
+  @HttpCode(HttpStatus.OK)
+  public async markTaskAssigneeDone(
+    @Req() request: FastifyRequest,
+    @Param('taskId') taskId: string,
+    @Param('membershipId') membershipId: string,
+  ): Promise<StoredTaskAssignee> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId) || !UUID_PATTERN.test(membershipId)) throw new NotFoundException();
+
+    try {
+      const assignee = await this.workshopTaskRepository.markAssigneeDone(context, taskId, membershipId);
+      if (!assignee) throw new NotFoundException();
+      return assignee;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/lead-decision')
+  @HttpCode(HttpStatus.OK)
+  public async recordTaskLeadDecision(
+    @Req() request: FastifyRequest,
+    @Param('taskId') taskId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTaskWithAssignees> {
+    const decision = readLeadDecisionInput(body);
+    if (!decision) throw new BadRequestException('Invalid decision payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.recordLeadDecision(context, taskId, decision);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
   private mapTaskTransitionError(error: unknown): Error {
     if (error instanceof WorkshopTaskInvalidTransitionError) {
       return new ConflictException('Task is not in the expected status for this transition');
@@ -751,6 +874,15 @@ class HealthController {
     }
     if (error instanceof WorkshopTaskClosedError) {
       return new ConflictException('Task is closed and cannot be modified');
+    }
+    if (error instanceof WorkshopTaskAlreadyDecidedError) {
+      return new ConflictException('Task already has a lead decision');
+    }
+    if (error instanceof WorkshopTaskGraphNodeNotFoundError) {
+      return new BadRequestException('Referenced graph node not found in tenant');
+    }
+    if (error instanceof WorkshopTaskGraphNodeNotWorkshopError) {
+      return new BadRequestException('Tasks can only be created on a workshop-type graph node');
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
@@ -1159,6 +1291,86 @@ class HealthController {
     return error instanceof Error ? error : new Error(String(error));
   }
 
+  @Post('v1/budget-graph-nodes/:nodeId/attachments')
+  public async createNodeAttachment(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<{ attachment: StoredNodeAttachment; uploadUrl: string }> {
+    const input = readCreateAttachmentInput(body);
+    if (!input) throw new BadRequestException('Invalid attachment payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.nodeAttachmentRepository) {
+      throw new ServiceUnavailableException('Attachment service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      return await this.nodeAttachmentRepository.createUploadTarget(context, nodeId, input);
+    } catch (error) {
+      throw this.mapAttachmentError(error);
+    }
+  }
+
+  @Get('v1/budget-graph-nodes/:nodeId/attachments')
+  public async listNodeAttachments(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+  ): Promise<StoredNodeAttachment[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.nodeAttachmentRepository) {
+      throw new ServiceUnavailableException('Attachment service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) return [];
+
+    return this.nodeAttachmentRepository.listAttachments(context, nodeId);
+  }
+
+  @Get('v1/budget-graph-nodes/:nodeId/attachments/:attachmentId/download-url')
+  public async getNodeAttachmentDownloadUrl(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Param('attachmentId') attachmentId: string,
+  ): Promise<{ url: string }> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.nodeAttachmentRepository) {
+      throw new ServiceUnavailableException('Attachment service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId) || !UUID_PATTERN.test(attachmentId)) throw new NotFoundException();
+
+    const url = await this.nodeAttachmentRepository.getDownloadUrl(context, nodeId, attachmentId);
+    if (!url) throw new NotFoundException();
+    return { url };
+  }
+
+  @Delete('v1/budget-graph-nodes/:nodeId/attachments/:attachmentId')
+  @HttpCode(HttpStatus.OK)
+  public async deleteNodeAttachment(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Param('attachmentId') attachmentId: string,
+  ): Promise<{ deleted: true }> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.nodeAttachmentRepository) {
+      throw new ServiceUnavailableException('Attachment service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId) || !UUID_PATTERN.test(attachmentId)) throw new NotFoundException();
+
+    const deleted = await this.nodeAttachmentRepository.deleteAttachment(context, nodeId, attachmentId);
+    if (!deleted) throw new NotFoundException();
+    return { deleted: true };
+  }
+
+  private mapAttachmentError(error: unknown): Error {
+    if (error instanceof NodeAttachmentNodeNotFoundError) {
+      return new BadRequestException('Referenced graph node not found in tenant');
+    }
+    if (error instanceof NodeAttachmentNotFoundError) return new NotFoundException();
+    if (error instanceof NotFoundException) return error;
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
   private async requirePlatformAdmin(
     request: FastifyRequest,
   ): Promise<TenantContext> {
@@ -1202,6 +1414,7 @@ function createApiModule(
   workshopRepository: WorkshopRepository | null,
   workshopTaskRepository: WorkshopTaskRepository | null,
   budgetGraphRepository: BudgetGraphRepository | null,
+  nodeAttachmentRepository: NodeAttachmentRepository | null,
 ): DynamicModule {
   return {
     module: ApiModule,
@@ -1255,6 +1468,10 @@ function createApiModule(
         provide: BUDGET_GRAPH_REPOSITORY,
         useValue: budgetGraphRepository,
       },
+      {
+        provide: NODE_ATTACHMENT_REPOSITORY,
+        useValue: nodeAttachmentRepository,
+      },
     ],
   };
 }
@@ -1276,6 +1493,7 @@ export async function createApiApp(
       options.workshopRepository ?? null,
       options.workshopTaskRepository ?? null,
       options.budgetGraphRepository ?? null,
+      options.nodeAttachmentRepository ?? null,
     ),
     new FastifyAdapter({
       genReqId: () => randomUUID(),
@@ -1565,6 +1783,55 @@ function readGraphNodeDetailsInput(
   const plannedAmount = readNonNegativeDecimal(input.plannedAmount, 2);
   if (expectedRevision === null || !title || plannedAmount === null) return null;
   return { expectedRevision, title, plannedAmount };
+}
+
+function readCreateGraphNodeTaskInput(body: unknown): CreateTaskForGraphNodeInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const description = normalizeString(input.description, 1000);
+  const plannedAmount = readNonNegativeDecimal(input.plannedAmount, 2);
+  const deadlineAt = readNullableIsoDate(input.deadlineAt);
+  if (!description || plannedAmount === null || deadlineAt === 'invalid') return null;
+
+  const assigneeIdsRaw = input.assigneeMembershipIds;
+  if (!Array.isArray(assigneeIdsRaw) || assigneeIdsRaw.length === 0) return null;
+  const assigneeMembershipIds: string[] = [];
+  for (const raw of assigneeIdsRaw) {
+    if (typeof raw !== 'string' || !UUID_PATTERN.test(raw)) return null;
+    assigneeMembershipIds.push(raw);
+  }
+
+  return {
+    description,
+    plannedAmount,
+    assigneeMembershipIds,
+    ...(deadlineAt ? { deadlineAt } : {}),
+  };
+}
+
+const LEAD_DECISIONS: readonly TaskLeadDecision[] = ['approved', 'rejected'];
+
+function readLeadDecisionInput(body: unknown): TaskLeadDecision | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const decision = (body as Record<string, unknown>).decision;
+  return typeof decision === 'string' && (LEAD_DECISIONS as readonly string[]).includes(decision)
+    ? (decision as TaskLeadDecision)
+    : null;
+}
+
+function readCreateAttachmentInput(body: unknown): CreateAttachmentUploadInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const fileName = normalizeString(input.fileName, 255);
+  const contentType = normalizeString(input.contentType, 150);
+  const sizeBytes = readNonNegativeInteger(input.sizeBytes);
+  if (!fileName || !contentType || sizeBytes === null) return null;
+  return { fileName, contentType, sizeBytes };
+}
+
+function readNonNegativeInteger(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
+  return String(value);
 }
 
 function readGraphNodeReparentInput(body: unknown): { expectedRevision: number; parentId: string | null } | null {
