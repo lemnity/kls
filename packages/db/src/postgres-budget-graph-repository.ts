@@ -29,6 +29,8 @@ export interface StoredBudgetGraphNode {
   positionY: string;
   width: string;
   height: string;
+  alternativeGroupId: string | null;
+  isActive: boolean;
   revision: number;
 }
 
@@ -95,11 +97,19 @@ export class BudgetGraphRevisionConflictError extends Error {
   }
 }
 
+export class BudgetGraphNotAlternativeError extends Error {
+  public constructor(public readonly nodeId: string) {
+    super(`Node ${nodeId} does not belong to an alternative group`);
+    this.name = 'BudgetGraphNotAlternativeError';
+  }
+}
+
 const NODE_RAW_COLUMNS = `id, budget_version_id, parent_id, workshop_id, node_type, title,
-           planned_amount, position_x, position_y, width, height, revision`;
+           planned_amount, position_x, position_y, width, height, alternative_group_id, is_active, revision`;
 const NODE_COLUMNS = `id, budget_version_id AS "budgetVersionId", parent_id AS "parentId",
            workshop_id AS "workshopId", node_type AS "nodeType", title, planned_amount AS "plannedAmount",
-           position_x AS "positionX", position_y AS "positionY", width, height, revision`;
+           position_x AS "positionX", position_y AS "positionY", width, height,
+           alternative_group_id AS "alternativeGroupId", is_active AS "isActive", revision`;
 
 interface NodeRow {
   id: string;
@@ -113,6 +123,8 @@ interface NodeRow {
   positionY: string;
   width: string;
   height: string;
+  alternativeGroupId: string | null;
+  isActive: boolean;
   revision: number;
 }
 
@@ -358,6 +370,159 @@ export class PostgresBudgetGraphRepository {
     return { deletedIds: result.rows.map((row) => row.id) };
   }
 
+  /**
+   * `BudgetAlternative`: deep-clones the subtree rooted at `nodeId` as a
+   * sibling under the same parent, and marks both the original and the
+   * clone as belonging to the same `alternativeGroupId` (reusing the
+   * original's group if it already has one, so a group can hold more than
+   * two candidates). The clone starts inactive — only the currently active
+   * branch counts toward ancestor totals (see `subtreeTotals`).
+   */
+  public async copyBranchAsAlternative(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+  ): Promise<StoredBudgetGraphNode[] | null> {
+    const current = await this.requireCurrentRevision(context, nodeId, expectedRevision);
+    if (current === null) return null;
+
+    const subtree = await this.client.query<{
+      id: string;
+      parentId: string | null;
+      workshopId: string | null;
+      nodeType: BudgetGraphNodeType;
+      title: string;
+      plannedAmount: string;
+      positionX: string;
+      positionY: string;
+      width: string;
+      height: string;
+      budgetVersionId: string;
+      alternativeGroupId: string | null;
+    }>(
+      `WITH RECURSIVE subtree AS (
+         SELECT id, parent_id, workshop_id, node_type, title, planned_amount,
+                position_x, position_y, width, height, budget_version_id, alternative_group_id
+         FROM budget_graph_nodes WHERE id = $1 AND tenant_id = $2
+         UNION ALL
+         SELECT c.id, c.parent_id, c.workshop_id, c.node_type, c.title, c.planned_amount,
+                c.position_x, c.position_y, c.width, c.height, c.budget_version_id, c.alternative_group_id
+         FROM budget_graph_nodes c
+         JOIN subtree s ON c.parent_id = s.id
+         WHERE c.tenant_id = $2
+       )
+       SELECT id, parent_id AS "parentId", workshop_id AS "workshopId", node_type AS "nodeType", title,
+              planned_amount AS "plannedAmount", position_x AS "positionX", position_y AS "positionY",
+              width, height, budget_version_id AS "budgetVersionId",
+              alternative_group_id AS "alternativeGroupId"
+       FROM subtree`,
+      [nodeId, context.tenantId],
+    );
+    const originalRows = subtree.rows;
+    const original = originalRows.find((row) => row.id === nodeId)!;
+
+    const groupId = original.alternativeGroupId ?? randomUUID();
+    const idMap = new Map<string, string>(originalRows.map((row) => [row.id, randomUUID()]));
+
+    // Column casts, in the same order as the values pushed below —
+    // generated per-row from this list so the placeholder count can never
+    // drift out of sync with the pushed values.
+    const CLONE_COLUMN_CASTS = [
+      '', '', '', '', '', '', '', // id, tenant_id, budget_version_id, parent_id, workshop_id, node_type, title
+      '::numeric', '::numeric', '::numeric', '::numeric', '::numeric', // planned_amount, position_x, position_y, width, height
+      '::uuid', '::boolean', // alternative_group_id, is_active
+    ];
+    const values: unknown[] = [];
+    const placeholders: string[] = [];
+    let paramIndex = 1;
+    for (const row of originalRows) {
+      const newId = idMap.get(row.id)!;
+      const newParentId = row.id === nodeId
+        ? original.parentId
+        : idMap.get(row.parentId!)!;
+      const isRootClone = row.id === nodeId;
+      values.push(
+        newId,
+        context.tenantId,
+        row.budgetVersionId,
+        newParentId,
+        row.workshopId,
+        row.nodeType,
+        row.title,
+        row.plannedAmount,
+        isRootClone ? Number(row.positionX) + 280 : row.positionX,
+        row.positionY,
+        row.width,
+        row.height,
+        // Only the root of the clone carries the alternative-group marker;
+        // it always starts inactive so it never double-counts alongside
+        // the branch that was already active before the copy.
+        isRootClone ? groupId : null,
+        !isRootClone,
+      );
+      const rowPlaceholders = CLONE_COLUMN_CASTS.map((cast) => `$${paramIndex++}${cast}`);
+      placeholders.push(`(${rowPlaceholders.join(', ')}, NOW())`);
+    }
+
+    await this.client.query(
+      `INSERT INTO budget_graph_nodes (
+         id, tenant_id, budget_version_id, parent_id, workshop_id, node_type, title,
+         planned_amount, position_x, position_y, width, height, alternative_group_id, is_active, updated_at
+       ) VALUES ${placeholders.join(', ')}`,
+      values,
+    );
+
+    if (!original.alternativeGroupId) {
+      await this.client.query(
+        'UPDATE budget_graph_nodes SET alternative_group_id = $3, revision = revision + 1, updated_at = NOW() WHERE id = $1 AND tenant_id = $2',
+        [nodeId, context.tenantId, groupId],
+      );
+    }
+
+    const newRootId = idMap.get(nodeId)!;
+    await this.client.query(
+      `INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+       VALUES ($1, $2, $3, 'budget_graph_node.branch_copied', 'budget_graph_node', $4::uuid,
+         jsonb_build_object('sourceNodeId', $4::uuid, 'newNodeId', $5::uuid, 'groupId', $6::uuid))`,
+      [randomUUID(), context.tenantId, context.membershipId, nodeId, newRootId, groupId],
+    );
+
+    return this.listNodes(context, original.budgetVersionId);
+  }
+
+  /**
+   * Switches which node in an alternative group counts toward ancestor
+   * totals. `nodeId` must belong to a group (have `alternativeGroupId`
+   * set) — otherwise `BudgetGraphNotAlternativeError`.
+   */
+  public async activateAlternative(
+    context: TenantContext,
+    nodeId: string,
+  ): Promise<StoredBudgetGraphNode[] | null> {
+    const node = await this.client.query<{ alternativeGroupId: string | null; budgetVersionId: string }>(
+      'SELECT alternative_group_id AS "alternativeGroupId", budget_version_id AS "budgetVersionId" FROM budget_graph_nodes WHERE id = $1 AND tenant_id = $2',
+      [nodeId, context.tenantId],
+    );
+    const row = node.rows[0];
+    if (!row) return null;
+    if (!row.alternativeGroupId) throw new BudgetGraphNotAlternativeError(nodeId);
+
+    await this.client.query(
+      `WITH updated AS (
+         UPDATE budget_graph_nodes
+         SET is_active = (id = $1::uuid), revision = revision + 1, updated_at = NOW()
+         WHERE tenant_id = $2 AND alternative_group_id = $3::uuid
+         RETURNING id
+       )
+       INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+       VALUES ($4, $2, $5, 'budget_graph_node.alternative_activated', 'budget_graph_node', $1::uuid,
+         jsonb_build_object('groupId', $3::uuid, 'activatedNodeId', $1::uuid))`,
+      [nodeId, context.tenantId, row.alternativeGroupId, randomUUID(), context.membershipId],
+    );
+
+    return this.listNodes(context, row.budgetVersionId);
+  }
+
   private async requireCurrentRevision(
     context: TenantContext,
     nodeId: string,
@@ -388,21 +553,35 @@ export class PostgresBudgetGraphRepository {
   /**
    * Bottom-up leaf sum per node ("обход от листьев к production"): a leaf
    * contributes its own planned amount; every ancestor's total is the sum
-   * of its descendant leaves' planned amounts.
+   * of its descendant leaves' planned amounts. An inactive alternative
+   * branch (`alternativeGroupId` set, `isActive` false) is excluded from
+   * its *parent's* children list — its whole subtree becomes invisible to
+   * ancestor totals — but its own `subtreeTotal` still computes normally
+   * (via `computeLeaves` called directly on it below), so the UI can show
+   * both alternatives' totals side by side for comparison.
    */
   private async subtreeTotals(context: TenantContext, budgetVersionId: string): Promise<Map<string, string>> {
-    const result = await this.client.query<{ id: string; plannedAmount: string }>(
-      `SELECT id, planned_amount AS "plannedAmount", parent_id AS "parentId"
+    const result = await this.client.query<{
+      id: string;
+      plannedAmount: string;
+      parentId: string | null;
+      alternativeGroupId: string | null;
+      isActive: boolean;
+    }>(
+      `SELECT id, planned_amount AS "plannedAmount", parent_id AS "parentId",
+              alternative_group_id AS "alternativeGroupId", is_active AS "isActive"
        FROM budget_graph_nodes
        WHERE tenant_id = $1 AND budget_version_id = $2`,
       [context.tenantId, budgetVersionId],
     );
 
-    const rows = result.rows as (typeof result.rows[number] & { parentId: string | null })[];
+    const rows = result.rows;
     const childrenOf = new Map<string | null, string[]>();
     const amountOf = new Map<string, string>();
     for (const row of rows) {
       amountOf.set(row.id, row.plannedAmount);
+      const isInactiveAlternative = row.alternativeGroupId !== null && !row.isActive;
+      if (isInactiveAlternative) continue;
       const siblings = childrenOf.get(row.parentId) ?? [];
       siblings.push(row.id);
       childrenOf.set(row.parentId, siblings);
@@ -464,6 +643,8 @@ function toStoredNode(row: NodeRow, subtreeTotal: string, approvedTotal: string 
     positionY: row.positionY,
     width: row.width,
     height: row.height,
+    alternativeGroupId: row.alternativeGroupId,
+    isActive: row.isActive,
     revision: row.revision,
   };
 }

@@ -28,6 +28,7 @@ model Tenant {
   taskDeadlineChanges TaskDeadlineChange[]
   taskAssignees TaskAssignee[]
   nodeAttachments NodeAttachment[]
+  budgetTemplates BudgetTemplate[]
 
   @@map("tenants")
 }
@@ -256,6 +257,8 @@ model BudgetGraphNode {
   positionY       Decimal           @map("position_y") @db.Decimal(10, 2)
   width           Decimal           @db.Decimal(10, 2)
   height          Decimal           @db.Decimal(10, 2)
+  alternativeGroupId String?        @map("alternative_group_id") @db.Uuid
+  isActive        Boolean           @default(true) @map("is_active")
   revision        Int               @default(1)
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
@@ -269,7 +272,22 @@ model BudgetGraphNode {
   @@unique([tenantId, id])
   @@index([tenantId, budgetVersionId])
   @@index([tenantId, parentId])
+  @@index([tenantId, alternativeGroupId])
   @@map("budget_graph_nodes")
+}
+
+model BudgetTemplate {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  name          String   @db.VarChar(200)
+  nodeType      String   @map("node_type") @db.VarChar(20)
+  plannedAmount Decimal  @map("planned_amount") @db.Decimal(14, 2)
+  createdAt     DateTime @default(now()) @map("created_at")
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, nodeType])
+  @@map("budget_templates")
 }
 
 model WorkshopTask {

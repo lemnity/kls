@@ -84,6 +84,7 @@ import {
   BudgetGraphCycleError,
   BudgetGraphInvalidHierarchyError,
   BudgetGraphNodeNotFoundError,
+  BudgetGraphNotAlternativeError,
   BudgetGraphRevisionConflictError,
   BudgetGraphVersionNotFoundError,
   BudgetGraphWorkshopNotFoundError,
@@ -97,6 +98,11 @@ import {
   type CreateAttachmentUploadInput,
   type StoredNodeAttachment,
 } from '@kulisa/db/node-attachment-repository';
+import {
+  type BudgetTemplateNodeType,
+  type CreateBudgetTemplateInput,
+  type StoredBudgetTemplate,
+} from '@kulisa/db/budget-template-repository';
 
 import {
   SessionAuthorizationError,
@@ -125,6 +131,7 @@ export interface ApiAppOptions {
   workshopTaskRepository?: WorkshopTaskRepository;
   budgetGraphRepository?: BudgetGraphRepository;
   nodeAttachmentRepository?: NodeAttachmentRepository;
+  budgetTemplateRepository?: BudgetTemplateRepository;
   /**
    * Enables Fastify's built-in per-request pino logging with the
    * Authorization/cookie headers redacted (every request always gets a
@@ -291,6 +298,18 @@ export interface BudgetGraphRepository {
     nodeId: string,
     expectedRevision: number,
   ): Promise<{ deletedIds: string[] } | null>;
+  copyBranchAsAlternative(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+  ): Promise<StoredBudgetGraphNode[] | null>;
+  activateAlternative(context: TenantContext, nodeId: string): Promise<StoredBudgetGraphNode[] | null>;
+}
+
+export interface BudgetTemplateRepository {
+  createTemplate(context: TenantContext, input: CreateBudgetTemplateInput): Promise<StoredBudgetTemplate>;
+  listTemplates(context: TenantContext): Promise<StoredBudgetTemplate[]>;
+  deleteTemplate(context: TenantContext, templateId: string): Promise<boolean>;
 }
 
 const READINESS_PROBES = Symbol('READINESS_PROBES');
@@ -306,6 +325,7 @@ const WORKSHOP_REPOSITORY = Symbol('WORKSHOP_REPOSITORY');
 const WORKSHOP_TASK_REPOSITORY = Symbol('WORKSHOP_TASK_REPOSITORY');
 const BUDGET_GRAPH_REPOSITORY = Symbol('BUDGET_GRAPH_REPOSITORY');
 const NODE_ATTACHMENT_REPOSITORY = Symbol('NODE_ATTACHMENT_REPOSITORY');
+const BUDGET_TEMPLATE_REPOSITORY = Symbol('BUDGET_TEMPLATE_REPOSITORY');
 
 @Controller()
 class HealthController {
@@ -336,6 +356,8 @@ class HealthController {
     private readonly budgetGraphRepository: BudgetGraphRepository | null,
     @Inject(NODE_ATTACHMENT_REPOSITORY)
     private readonly nodeAttachmentRepository: NodeAttachmentRepository | null,
+    @Inject(BUDGET_TEMPLATE_REPOSITORY)
+    private readonly budgetTemplateRepository: BudgetTemplateRepository | null,
   ) {}
 
   @Get('health')
@@ -1270,6 +1292,51 @@ class HealthController {
     }
   }
 
+  @Post('v1/budget-graph-nodes/:nodeId/copy-branch')
+  public async copyBudgetGraphBranch(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetGraphNode[]> {
+    const expectedRevision = readExpectedRevisionInput(body);
+    if (expectedRevision === null) throw new BadRequestException('Invalid or missing expectedRevision');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const nodes = await this.budgetGraphRepository.copyBranchAsAlternative(context, nodeId, expectedRevision);
+      if (!nodes) throw new NotFoundException();
+      return nodes;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
+  @Post('v1/budget-graph-nodes/:nodeId/activate-alternative')
+  @HttpCode(HttpStatus.OK)
+  public async activateBudgetGraphAlternative(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+  ): Promise<StoredBudgetGraphNode[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const nodes = await this.budgetGraphRepository.activateAlternative(context, nodeId);
+      if (!nodes) throw new NotFoundException();
+      return nodes;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
   private mapBudgetGraphError(error: unknown): Error {
     if (error instanceof BudgetGraphVersionNotFoundError) return new NotFoundException();
     if (error instanceof BudgetGraphNodeNotFoundError) {
@@ -1286,6 +1353,9 @@ class HealthController {
     }
     if (error instanceof BudgetGraphRevisionConflictError) {
       return new ConflictException('Node was changed by someone else — reload and try again');
+    }
+    if (error instanceof BudgetGraphNotAlternativeError) {
+      return new BadRequestException('Node does not belong to an alternative group');
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
@@ -1371,6 +1441,47 @@ class HealthController {
     return error instanceof Error ? error : new Error(String(error));
   }
 
+  @Post('v1/budget-templates')
+  public async createBudgetTemplate(
+    @Req() request: FastifyRequest,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetTemplate> {
+    const input = readCreateBudgetTemplateInput(body);
+    if (!input) throw new BadRequestException('Invalid template payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetTemplateRepository) {
+      throw new ServiceUnavailableException('Budget template service is not configured');
+    }
+    return this.budgetTemplateRepository.createTemplate(context, input);
+  }
+
+  @Get('v1/budget-templates')
+  public async listBudgetTemplates(@Req() request: FastifyRequest): Promise<StoredBudgetTemplate[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetTemplateRepository) {
+      throw new ServiceUnavailableException('Budget template service is not configured');
+    }
+    return this.budgetTemplateRepository.listTemplates(context);
+  }
+
+  @Delete('v1/budget-templates/:templateId')
+  @HttpCode(HttpStatus.OK)
+  public async deleteBudgetTemplate(
+    @Req() request: FastifyRequest,
+    @Param('templateId') templateId: string,
+  ): Promise<{ deleted: true }> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetTemplateRepository) {
+      throw new ServiceUnavailableException('Budget template service is not configured');
+    }
+    if (!UUID_PATTERN.test(templateId)) throw new NotFoundException();
+
+    const deleted = await this.budgetTemplateRepository.deleteTemplate(context, templateId);
+    if (!deleted) throw new NotFoundException();
+    return { deleted: true };
+  }
+
   private async requirePlatformAdmin(
     request: FastifyRequest,
   ): Promise<TenantContext> {
@@ -1415,6 +1526,7 @@ function createApiModule(
   workshopTaskRepository: WorkshopTaskRepository | null,
   budgetGraphRepository: BudgetGraphRepository | null,
   nodeAttachmentRepository: NodeAttachmentRepository | null,
+  budgetTemplateRepository: BudgetTemplateRepository | null,
 ): DynamicModule {
   return {
     module: ApiModule,
@@ -1472,6 +1584,10 @@ function createApiModule(
         provide: NODE_ATTACHMENT_REPOSITORY,
         useValue: nodeAttachmentRepository,
       },
+      {
+        provide: BUDGET_TEMPLATE_REPOSITORY,
+        useValue: budgetTemplateRepository,
+      },
     ],
   };
 }
@@ -1494,6 +1610,7 @@ export async function createApiApp(
       options.workshopTaskRepository ?? null,
       options.budgetGraphRepository ?? null,
       options.nodeAttachmentRepository ?? null,
+      options.budgetTemplateRepository ?? null,
     ),
     new FastifyAdapter({
       genReqId: () => randomUUID(),
@@ -1832,6 +1949,21 @@ function readCreateAttachmentInput(body: unknown): CreateAttachmentUploadInput |
 function readNonNegativeInteger(value: unknown): string | null {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
   return String(value);
+}
+
+function readExpectedRevisionInput(body: unknown): number | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  return readPositiveInteger((body as Record<string, unknown>).expectedRevision);
+}
+
+function readCreateBudgetTemplateInput(body: unknown): CreateBudgetTemplateInput | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const name = normalizeString(input.name, 200);
+  const nodeType = readNodeType(input.nodeType);
+  const plannedAmount = readNonNegativeDecimal(input.plannedAmount, 2);
+  if (!name || !nodeType || plannedAmount === null) return null;
+  return { name, nodeType, plannedAmount };
 }
 
 function readGraphNodeReparentInput(body: unknown): { expectedRevision: number; parentId: string | null } | null {

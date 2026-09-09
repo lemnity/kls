@@ -11,6 +11,7 @@ import { PostgresWorkshopRepository } from '@kulisa/db/workshop-repository';
 import { PostgresWorkshopTaskRepository } from '@kulisa/db/workshop-task-repository';
 import { PostgresBudgetGraphRepository } from '@kulisa/db/budget-graph-repository';
 import { S3NodeAttachmentRepository } from '@kulisa/db/node-attachment-repository';
+import { PostgresBudgetTemplateRepository } from '@kulisa/db/budget-template-repository';
 import { PostgresRoleRepository } from '@kulisa/db/role-repository';
 import { Pool } from 'pg';
 
@@ -46,6 +47,7 @@ const app = await createApiApp({
     secretAccessKey: environment.s3SecretKey,
     bucket: environment.s3Bucket,
   }),
+  budgetTemplateRepository: new PostgresBudgetTemplateRepository(databasePool),
 });
 app.addHook('onClose', async () => databasePool.end());
 await app.listen({ host, port });
