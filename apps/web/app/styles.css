@@ -1172,6 +1172,18 @@ input:focus-visible,
   color: var(--color-text-muted);
 }
 
+/* Flags that the visual node constructor and the tabular smeta are two
+   independent tools with independently computed totals — shown wherever
+   a link between the two is offered, so the two views' numbers not
+   matching each other reads as expected, not as a bug. */
+.budget-graph-notice {
+  font-size: 0.82rem;
+  padding: 10px 14px;
+  background: var(--color-neutral-soft);
+  border-radius: var(--radius-sm);
+  margin: 4px 0 16px;
+}
+
 /* -------------------------------------------------------------------- */
 /* Auth page                                                            */
 /* -------------------------------------------------------------------- */

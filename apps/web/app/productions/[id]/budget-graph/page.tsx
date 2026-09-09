@@ -57,6 +57,11 @@ export default async function BudgetGraphPage({ params }: { params: Promise<{ id
           <h1>{production.title}</h1>
         </section>
 
+        <p className="budget-graph-notice muted">
+          Это отдельный инструмент планирования: суммы узлов не связаны с табличной сметой постановки и считаются
+          независимо — совпадения между ними нет и не подразумевается.
+        </p>
+
         <BudgetGraphEditor budgetVersionId={budget.versionId} />
       </main>
     </AppShell>
