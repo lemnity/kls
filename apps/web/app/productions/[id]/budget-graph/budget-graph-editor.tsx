@@ -51,12 +51,25 @@ const CHILD_TYPE: Record<BudgetGraphNodeType, BudgetGraphNodeType | null> = {
 function BudgetGraphNodeCard({ data, selected }: NodeProps) {
   const node = data as unknown as StoredBudgetGraphNode;
   return (
-    <div className={`graph-node${selected ? ' graph-node--selected' : ''}`} tabIndex={0} role="group" aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}`}>
+    <div
+      className={`graph-node${selected ? ' graph-node--selected' : ''}`}
+      tabIndex={0}
+      role="group"
+      aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}`}
+    >
       <Handle type="target" position={Position.Top} />
       <span className="graph-node__type">{NODE_TYPE_LABEL[node.nodeType]}</span>
       <strong className="graph-node__title">{node.title}</strong>
-      <span className="graph-node__amount">План: {node.plannedAmount} ₽</span>
-      <span className="graph-node__amount graph-node__amount--total">Сумма ветви: {node.subtreeTotal} ₽</span>
+      <div className="graph-node__stats">
+        <div className="graph-node__stat">
+          <span className="graph-node__stat-label">План</span>
+          <span className="graph-node__stat-value">{node.plannedAmount} ₽</span>
+        </div>
+        <div className="graph-node__stat graph-node__stat--total">
+          <span className="graph-node__stat-label">Сумма ветви</span>
+          <span className="graph-node__stat-value">{node.subtreeTotal} ₽</span>
+        </div>
+      </div>
       <Handle type="source" position={Position.Bottom} />
     </div>
   );
@@ -106,7 +119,11 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
         id: node.id,
         type: 'budgetNode',
         position: { x: Number(node.positionX), y: Number(node.positionY) },
-        style: { width: Number(node.width), height: Number(node.height) },
+        // Height is intentionally not forced here: the card's content
+        // (title + two stat rows) dictates its real height, so a stale
+        // stored height never clips it — width is still fixed for a
+        // predictable canvas layout.
+        style: { width: Number(node.width) },
         data: node as unknown as Record<string, unknown>,
         selected: node.id === selectedId,
       })),
@@ -302,36 +319,53 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       </div>
 
       {selectedNode && (
-        <form className="budget-graph__edit-panel" onSubmit={handleUpdateDetails}>
-          <span className="graph-node__type">{NODE_TYPE_LABEL[selectedNode.nodeType]}</span>
-          <label>
-            <span className="sr-only">Название узла</span>
-            <input
-              type="text"
-              value={editTitle}
-              onChange={(event) => setEditTitle(event.target.value)}
-              required
-            />
-          </label>
-          <label>
-            <span className="sr-only">Плановая сумма</span>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={editAmount}
-              onChange={(event) => setEditAmount(event.target.value)}
-            />
-          </label>
-          <button type="submit" className="btn-pill btn-pill--accent" disabled={saving}>
-            Сохранить
-          </button>
-          <button type="button" className="btn-pill btn-pill--ghost" disabled={saving} onClick={handleDelete}>
-            Удалить узел
-          </button>
-          <button type="button" className="btn-pill btn-pill--ghost" onClick={() => setSelectedId(null)}>
-            Снять выделение
-          </button>
-        </form>
+        <>
+          <div className="budget-graph__backdrop" onClick={() => setSelectedId(null)} />
+          <form className="budget-graph__side-panel" onSubmit={handleUpdateDetails}>
+            <div className="budget-graph__side-panel-header">
+              <span className="graph-node__type">{NODE_TYPE_LABEL[selectedNode.nodeType]}</span>
+              <button
+                type="button"
+                className="icon-btn icon-btn--ghost"
+                aria-label="Закрыть панель"
+                onClick={() => setSelectedId(null)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <label className="budget-graph__side-panel-field">
+              <span>Название</span>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(event) => setEditTitle(event.target.value)}
+                required
+              />
+            </label>
+            <label className="budget-graph__side-panel-field">
+              <span>Плановая сумма, ₽</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={editAmount}
+                onChange={(event) => setEditAmount(event.target.value)}
+              />
+            </label>
+            <p className="muted">
+              Сумма ветви (сумма листьев ниже по дереву): <strong>{selectedNode.subtreeTotal} ₽</strong>
+            </p>
+
+            <div className="budget-graph__side-panel-actions">
+              <button type="submit" className="btn-pill btn-pill--accent" disabled={saving}>
+                Сохранить
+              </button>
+              <button type="button" className="btn-pill btn-pill--ghost" disabled={saving} onClick={handleDelete}>
+                Удалить узел
+              </button>
+            </div>
+          </form>
+        </>
       )}
 
       {error && (
