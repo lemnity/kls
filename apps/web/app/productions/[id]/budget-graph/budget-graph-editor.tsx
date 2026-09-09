@@ -10,6 +10,7 @@ import {
   type Connection,
   type Edge,
   type Node,
+  type NodeChange,
   type NodeProps,
   type NodeTypes,
 } from '@xyflow/react';
@@ -156,6 +157,30 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
         })),
     [items],
   );
+
+  // Without this, `nodes` is a controlled prop with no feedback loop: React
+  // Flow moves the node visually during its own internal drag tracking, but
+  // any unrelated re-render of this component (selection, saving state,
+  // the edit-panel effect, ...) recomputes `flowNodes` from the *last
+  // saved* item positions and snaps the node back mid-drag — the reported
+  // jumpiness. Applying position changes into `items` as they happen keeps
+  // the rendered position in sync with the live drag on every frame.
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    const moves = changes.filter(
+      (change): change is Extract<NodeChange, { type: 'position' }> =>
+        change.type === 'position' && change.position !== undefined,
+    );
+    if (moves.length === 0) return;
+
+    setItems((current) => {
+      const byId = new Map(moves.map((change) => [change.id, change.position!]));
+      return current.map((node) => {
+        const position = byId.get(node.id);
+        if (!position) return node;
+        return { ...node, positionX: position.x.toFixed(2), positionY: position.y.toFixed(2) };
+      });
+    });
+  }, []);
 
   async function handleNodeDragStop(_event: unknown, dragged: Node): Promise<void> {
     const current = items.find((node) => node.id === dragged.id);
@@ -429,6 +454,7 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
             nodes={flowNodes}
             edges={flowEdges}
             nodeTypes={NODE_TYPES}
+            onNodesChange={handleNodesChange}
             onNodeDragStop={handleNodeDragStop}
             onConnect={handleConnect}
             onNodeClick={(_event, node) => setSelectedId(node.id)}
