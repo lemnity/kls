@@ -1719,6 +1719,32 @@ input:focus-visible,
   gap: 8px;
 }
 
+.budget-graph__edit-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 14px 20px;
+}
+
+.budget-graph__edit-panel input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  min-height: 44px;
+}
+
+.budget-graph__edit-panel input[type='text']:not([inputmode]) {
+  min-width: 200px;
+  font-weight: 700;
+}
+
 .budget-graph__canvas {
   height: 640px;
   background: var(--color-surface);

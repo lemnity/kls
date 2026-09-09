@@ -237,6 +237,12 @@ export interface BudgetGraphRepository {
     expectedRevision: number,
     layout: { positionX: string; positionY: string; width: string; height: string },
   ): Promise<StoredBudgetGraphNode | null>;
+  updateNodeDetails(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+    details: { title: string; plannedAmount: string },
+  ): Promise<StoredBudgetGraphNode | null>;
   reparentNode(
     context: TenantContext,
     nodeId: string,
@@ -1054,6 +1060,30 @@ class HealthController {
     }
   }
 
+  @Patch('v1/budget-graph-nodes/:nodeId/details')
+  public async updateBudgetGraphNodeDetails(
+    @Req() request: FastifyRequest,
+    @Param('nodeId') nodeId: string,
+    @Body() body: unknown,
+  ): Promise<StoredBudgetGraphNode> {
+    const input = readGraphNodeDetailsInput(body);
+    if (!input) throw new BadRequestException('Invalid details payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.budgetGraphRepository) {
+      throw new ServiceUnavailableException('Budget graph service is not configured');
+    }
+    if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException();
+
+    try {
+      const node = await this.budgetGraphRepository.updateNodeDetails(context, nodeId, input.expectedRevision, input);
+      if (!node) throw new NotFoundException();
+      return node;
+    } catch (error) {
+      throw this.mapBudgetGraphError(error);
+    }
+  }
+
   @Patch('v1/budget-graph-nodes/:nodeId/parent')
   public async reparentBudgetGraphNode(
     @Req() request: FastifyRequest,
@@ -1523,6 +1553,18 @@ function readGraphNodeLayoutInput(
     return null;
   }
   return { expectedRevision, positionX, positionY, width, height };
+}
+
+function readGraphNodeDetailsInput(
+  body: unknown,
+): { expectedRevision: number; title: string; plannedAmount: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const expectedRevision = readPositiveInteger(input.expectedRevision);
+  const title = normalizeString(input.title, 200);
+  const plannedAmount = readNonNegativeDecimal(input.plannedAmount, 2);
+  if (expectedRevision === null || !title || plannedAmount === null) return null;
+  return { expectedRevision, title, plannedAmount };
 }
 
 function readGraphNodeReparentInput(body: unknown): { expectedRevision: number; parentId: string | null } | null {
