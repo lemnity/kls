@@ -308,6 +308,9 @@ input:focus-visible,
 
 .topbar {
   grid-area: topbar;
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -1828,17 +1831,22 @@ input:focus-visible,
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-soft);
   cursor: grab;
-  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
+/* No `transform` here on purpose: React Flow computes each drag frame's
+   position from the pointer's offset relative to the node's own bounding
+   box. A hover/active-driven transform on this inner element shifts that
+   box out from under the cursor mid-gesture (hover can toggle off as the
+   node moves), which desynced RF's drag math — reported as the node not
+   moving and the canvas jumping. box-shadow doesn't affect layout, so it's
+   safe for interactive feedback here. */
 .graph-node:hover {
   box-shadow: var(--shadow-card);
-  transform: translateY(-2px);
 }
 
 .graph-node:active {
   cursor: grabbing;
-  transform: translateY(0);
 }
 
 .graph-node:focus-visible,
