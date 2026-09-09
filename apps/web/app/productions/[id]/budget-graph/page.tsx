@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../../app-shell.js';
 import { apiFetch } from '../../../lib/api.js';
+import { MOCK_BUDGETS, MOCK_PRODUCTIONS } from '../../../lib/mock-data.js';
 import { getSessionToken } from '../../../lib/session.js';
 import { BudgetGraphEditor } from './budget-graph-editor.js';
 
@@ -63,6 +64,10 @@ export default async function BudgetGraphPage({ params }: { params: Promise<{ id
 }
 
 async function loadProduction(id: string, token: string): Promise<Production | null> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1') {
+    return MOCK_PRODUCTIONS.find((production) => production.id === id) ?? null;
+  }
+
   const response = await apiFetch(`/v1/productions/${id}`, { token });
   if (response.status === 401) redirect('/login');
   if (!response.ok) return null;
@@ -71,6 +76,10 @@ async function loadProduction(id: string, token: string): Promise<Production | n
 }
 
 async function loadBudget(id: string, token: string): Promise<Budget | null> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1') {
+    return MOCK_BUDGETS[id] ?? null;
+  }
+
   const response = await apiFetch(`/v1/productions/${id}/budget`, { token });
   if (response.status === 401) redirect('/login');
   if (!response.ok) return null;

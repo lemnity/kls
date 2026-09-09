@@ -2070,3 +2070,78 @@ input:focus-visible,
 .graph-node--on-budget .graph-node__stat--total .graph-node__stat-value {
   color: var(--color-success);
 }
+
+/* Same over/on-budget signal as the canvas card's left accent, applied to
+   the side panel's "Сумма ветви" line — the panel had no visual cue at
+   all before, so a mismatch (e.g. a department entering an unchecked sum)
+   was invisible until you went looking at the canvas. */
+.budget-graph__variance-value--over {
+  color: var(--color-danger);
+}
+
+.budget-graph__variance-value--on {
+  color: var(--color-success);
+}
+
+.budget-graph__variance-note {
+  color: var(--color-danger);
+  font-size: 0.85rem;
+}
+
+/* An alternative branch that lost the comparison — kept on the canvas
+   (so the two options stay visible side by side) but visually receded,
+   since only the active branch counts toward ancestor totals. */
+.graph-node--inactive-alternative {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.graph-node__badge {
+  align-self: flex-start;
+  font: 700 0.68rem/1.4 var(--font-sans);
+  color: var(--color-text-muted);
+  background: var(--color-neutral-soft);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+}
+
+.budget-graph__alternative-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.budget-graph__alternative-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.budget-graph__alternative-active {
+  font-weight: 700;
+  color: var(--color-success);
+}
+
+.budget-graph__save-template-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.budget-graph__template-library {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}

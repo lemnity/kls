@@ -33,6 +33,8 @@ interface StoredBudgetGraphNode {
   positionY: string;
   width: string;
   height: string;
+  alternativeGroupId: string | null;
+  isActive: boolean;
   revision: number;
 }
 
@@ -72,6 +74,13 @@ interface MembershipListItem {
   status: 'ACTIVE' | 'INACTIVE';
 }
 
+interface StoredBudgetTemplate {
+  id: string;
+  name: string;
+  nodeType: BudgetGraphNodeType;
+  plannedAmount: string;
+}
+
 const TASK_STATUS_LABEL: Record<string, string> = {
   new: 'На согласовании',
   approved: 'Принято',
@@ -107,25 +116,36 @@ const CHILD_TYPE: Record<BudgetGraphNodeType, BudgetGraphNodeType | null> = {
  * multi-assignee WorkshopTask model). Explicit rule from the user: over ->
  * red, exact match -> green; under is left unstyled (not specified).
  */
-function budgetVarianceClass(node: StoredBudgetGraphNode): string {
+type BudgetVarianceKind = 'over' | 'on' | null;
+
+function budgetVarianceKind(node: StoredBudgetGraphNode): BudgetVarianceKind {
   const planned = Number(node.plannedAmount);
   const subtree = Number(node.subtreeTotal);
-  if (subtree > planned) return ' graph-node--over-budget';
-  if (subtree === planned) return ' graph-node--on-budget';
+  if (subtree > planned) return 'over';
+  if (subtree === planned) return 'on';
+  return null;
+}
+
+function budgetVarianceClass(node: StoredBudgetGraphNode): string {
+  const kind = budgetVarianceKind(node);
+  if (kind === 'over') return ' graph-node--over-budget';
+  if (kind === 'on') return ' graph-node--on-budget';
   return '';
 }
 
 function BudgetGraphNodeCard({ data, selected }: NodeProps) {
   const node = data as unknown as StoredBudgetGraphNode;
+  const isInactiveAlternative = node.alternativeGroupId !== null && !node.isActive;
   return (
     <div
-      className={`graph-node${selected ? ' graph-node--selected' : ''}${budgetVarianceClass(node)}`}
+      className={`graph-node${selected ? ' graph-node--selected' : ''}${budgetVarianceClass(node)}${isInactiveAlternative ? ' graph-node--inactive-alternative' : ''}`}
       tabIndex={0}
       role="group"
-      aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}`}
+      aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}${isInactiveAlternative ? ' (неактивная альтернатива)' : ''}`}
     >
       <Handle type="target" position={Position.Left} />
       <span className="graph-node__type">{NODE_TYPE_LABEL[node.nodeType]}</span>
+      {isInactiveAlternative && <span className="graph-node__badge">неактивная альтернатива</span>}
       <strong className="graph-node__title">{node.title}</strong>
       <div className="graph-node__stats">
         <div className="graph-node__stat">
@@ -171,6 +191,10 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [taskAmount, setTaskAmount] = useState('0.00');
   const [taskAssigneeIds, setTaskAssigneeIds] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [taskCreating, setTaskCreating] = useState(false);
+  const [templates, setTemplates] = useState<StoredBudgetTemplate[]>([]);
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [copyingBranch, setCopyingBranch] = useState(false);
 
   const selectedNode = items.find((item) => item.id === selectedId) ?? null;
 
@@ -205,6 +229,15 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       .then((list) => setWorkshops(list.filter((workshop) => workshop.isActive)))
       .catch(() => setWorkshops([]));
   }, []);
+
+  const loadTemplates = useCallback(async () => {
+    const response = await fetch('/api/proxy/budget-templates');
+    setTemplates(response.ok ? ((await response.json()) as StoredBudgetTemplate[]) : []);
+  }, []);
+
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
 
   const loadWorkshopExtras = useCallback(async (nodeId: string) => {
     const [tasksResponse, attachmentsResponse] = await Promise.all([
@@ -366,6 +399,36 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
     await load();
   }
 
+  async function handleCopyBranch(): Promise<void> {
+    if (!selectedNode || copyingBranch) return;
+
+    setCopyingBranch(true);
+    try {
+      const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/copy-branch`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ expectedRevision: selectedNode.revision }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        setError(payload?.message ?? 'Не удалось скопировать ветку.');
+        return;
+      }
+      await load();
+    } finally {
+      setCopyingBranch(false);
+    }
+  }
+
+  async function handleActivateAlternative(nodeId: string): Promise<void> {
+    const response = await fetch(`/api/proxy/budget-graph-nodes/${nodeId}/activate-alternative`, { method: 'POST' });
+    if (!response.ok) {
+      setError('Не удалось переключить альтернативу.');
+      return;
+    }
+    await load();
+  }
+
   async function handleCreate(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     const parent = items.find((node) => node.id === formParentId);
@@ -395,9 +458,49 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       setError(payload?.message ?? 'Не удалось создать узел.');
       return;
     }
+    if (saveAsTemplate) {
+      await fetch('/api/proxy/budget-templates', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: formTitle, nodeType, plannedAmount: formAmount }),
+      });
+      await loadTemplates();
+    }
     setFormTitle('');
     setFormAmount('0.00');
     setFormWorkshopId('');
+    setSaveAsTemplate(false);
+    await load();
+  }
+
+  async function handleUseTemplate(template: StoredBudgetTemplate): Promise<void> {
+    const parent = items.find((node) => node.id === formParentId);
+    const pendingNodeType: BudgetGraphNodeType = parent ? (CHILD_TYPE[parent.nodeType] ?? 'production') : 'production';
+    if (template.nodeType !== pendingNodeType) return;
+    if (!parent && items.length > 0) {
+      setError('Выберите родительский узел.');
+      return;
+    }
+
+    const response = await fetch(`/api/proxy/budget-versions/${budgetVersionId}/graph-nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        nodeType: template.nodeType,
+        title: template.name,
+        plannedAmount: template.plannedAmount,
+        positionX: (Math.random() * 400).toFixed(2),
+        positionY: (Math.random() * 400).toFixed(2),
+        width: '180.00',
+        height: '90.00',
+        ...(parent ? { parentId: parent.id } : {}),
+      }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      setError(payload?.message ?? 'Не удалось создать узел из шаблона.');
+      return;
+    }
     await load();
   }
 
@@ -410,29 +513,34 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   }
 
   async function handleCreateTask(): Promise<void> {
-    if (!selectedNode || taskAssigneeIds.length === 0) {
-      setError('Выберите хотя бы одного исполнителя.');
+    if (!selectedNode || taskAssigneeIds.length === 0 || taskCreating) {
+      if (!taskCreating) setError('Выберите хотя бы одного исполнителя.');
       return;
     }
 
-    const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/tasks`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        description: taskDescription,
-        plannedAmount: taskAmount,
-        assigneeMembershipIds: taskAssigneeIds,
-      }),
-    });
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-      setError(payload?.message ?? 'Не удалось создать задачу.');
-      return;
+    setTaskCreating(true);
+    try {
+      const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          description: taskDescription,
+          plannedAmount: taskAmount,
+          assigneeMembershipIds: taskAssigneeIds,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        setError(payload?.message ?? 'Не удалось создать задачу.');
+        return;
+      }
+      setTaskDescription('');
+      setTaskAmount('0.00');
+      setTaskAssigneeIds([]);
+      await loadWorkshopExtras(selectedNode.id);
+    } finally {
+      setTaskCreating(false);
     }
-    setTaskDescription('');
-    setTaskAmount('0.00');
-    setTaskAssigneeIds([]);
-    await loadWorkshopExtras(selectedNode.id);
   }
 
   async function handleMarkAssigneeDone(taskId: string, membershipId: string): Promise<void> {
@@ -573,10 +681,37 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
               </select>
             </label>
           )}
+          <label className="budget-graph__save-template-toggle">
+            <input
+              type="checkbox"
+              checked={saveAsTemplate}
+              onChange={(event) => setSaveAsTemplate(event.target.checked)}
+            />
+            Сохранить как шаблон
+          </label>
           <button type="submit" className="btn-pill btn-pill--accent">
             Добавить узел
           </button>
         </form>
+
+        {templates.filter((template) => template.nodeType === pendingNodeType).length > 0 && (
+          <div className="budget-graph__template-library">
+            <span className="muted">Из шаблона:</span>
+            {templates
+              .filter((template) => template.nodeType === pendingNodeType)
+              .map((template) => (
+                <button
+                  key={template.id}
+                  type="button"
+                  className="btn-pill btn-pill--ghost btn-pill--small"
+                  onClick={() => handleUseTemplate(template)}
+                  disabled={!formParent && items.length > 0}
+                >
+                  {template.name} ({template.plannedAmount} ₽)
+                </button>
+              ))}
+          </div>
+        )}
 
         <div className="budget-graph__actions">
           <button
@@ -624,12 +759,52 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
               />
             </label>
             <p className="muted">
-              Сумма ветви (сумма листьев ниже по дереву): <strong>{selectedNode.subtreeTotal} ₽</strong>
+              Сумма ветви (сумма листьев ниже по дереву):{' '}
+              <strong
+                className={
+                  budgetVarianceKind(selectedNode) === 'over'
+                    ? 'budget-graph__variance-value budget-graph__variance-value--over'
+                    : budgetVarianceKind(selectedNode) === 'on'
+                      ? 'budget-graph__variance-value budget-graph__variance-value--on'
+                      : undefined
+                }
+              >
+                {selectedNode.subtreeTotal} ₽
+              </strong>
+              {budgetVarianceKind(selectedNode) === 'over' && (
+                <span className="budget-graph__variance-note"> — превышает плановую сумму, требует проверки</span>
+              )}
             </p>
             {selectedNode.approvedTotal !== null && (
               <p className="muted">
                 Согласовано (принятые задачи цеха): <strong>{selectedNode.approvedTotal} ₽</strong>
               </p>
+            )}
+
+            {selectedNode.alternativeGroupId !== null && (
+              <div className="budget-graph__side-panel-section">
+                <h3>Альтернативы</h3>
+                <ul className="budget-graph__alternative-list">
+                  {items
+                    .filter((node) => node.alternativeGroupId === selectedNode.alternativeGroupId)
+                    .map((node) => (
+                      <li key={node.id} className="budget-graph__alternative-row">
+                        <span className={node.isActive ? 'budget-graph__alternative-active' : 'muted'}>
+                          {node.title} — {node.subtreeTotal} ₽{node.isActive ? ' (активна)' : ''}
+                        </span>
+                        {!node.isActive && (
+                          <button
+                            type="button"
+                            className="btn-pill btn-pill--ghost btn-pill--small"
+                            onClick={() => handleActivateAlternative(node.id)}
+                          >
+                            Сделать активной
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                </ul>
+              </div>
             )}
 
             {selectedNode.nodeType === 'workshop' && (
@@ -759,10 +934,10 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
                   <button
                     type="button"
                     className="btn-pill btn-pill--accent btn-pill--small"
-                    disabled={!taskDescription || taskAssigneeIds.length === 0}
+                    disabled={!taskDescription || taskAssigneeIds.length === 0 || taskCreating}
                     onClick={handleCreateTask}
                   >
-                    Создать задачу
+                    {taskCreating ? 'Создаём…' : 'Создать задачу'}
                   </button>
                 </div>
               </div>
@@ -771,6 +946,14 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
             <div className="budget-graph__side-panel-actions">
               <button type="submit" className="btn-pill btn-pill--accent" disabled={saving}>
                 Сохранить
+              </button>
+              <button
+                type="button"
+                className="btn-pill btn-pill--ghost"
+                disabled={copyingBranch}
+                onClick={handleCopyBranch}
+              >
+                {copyingBranch ? 'Копируем…' : 'Скопировать как альтернативу'}
               </button>
               <button type="button" className="btn-pill btn-pill--ghost" disabled={saving} onClick={handleDelete}>
                 Удалить узел

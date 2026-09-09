@@ -43,6 +43,10 @@
     "./node-attachment-repository": {
       "types": "./dist/s3-node-attachment-repository.d.ts",
       "default": "./dist/s3-node-attachment-repository.js"
+    },
+    "./budget-template-repository": {
+      "types": "./dist/postgres-budget-template-repository.d.ts",
+      "default": "./dist/postgres-budget-template-repository.js"
     }
   },
   "scripts": {

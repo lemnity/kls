@@ -21,6 +21,7 @@ import {
 import { WorkshopManagerNotFoundError, WorkshopNameAlreadyExistsError } from '@kulisa/db/workshop-repository';
 import {
   BudgetGraphCycleError,
+  BudgetGraphNotAlternativeError,
   BudgetGraphRevisionConflictError,
 } from '@kulisa/db/budget-graph-repository';
 import {
@@ -3224,6 +3225,213 @@ describe('budget graph', () => {
       expect(invalid.statusCode).toBe(400);
       expect(notFoundNode.statusCode).toBe(400);
       expect(unauthenticated.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('copies a branch as an alternative, and rejects an unauthenticated request', async () => {
+    const clonedNode = { ...storedNode, id: '66666666-6666-4666-8666-666666666666', isActive: false, alternativeGroupId: 'group-1' };
+    const copyCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async copyBranchAsAlternative(context: unknown, id: unknown, expectedRevision: unknown) {
+          copyCalls.push({ context, id, expectedRevision });
+          return [{ ...storedNode, alternativeGroupId: 'group-1' }, clonedNode];
+        },
+      },
+    } as never);
+
+    try {
+      const unauthenticated = await createApiApp().then((unauthApp) =>
+        unauthApp.inject({ method: 'POST', url: `/v1/budget-graph-nodes/${nodeId}/copy-branch`, payload: { expectedRevision: 1 } }).finally(() => unauthApp.close()));
+      const missingBody = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/copy-branch`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: {},
+      });
+      const copied = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/copy-branch`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1 },
+      });
+
+      expect(unauthenticated.statusCode).toBe(401);
+      expect(missingBody.statusCode).toBe(400);
+      expect(copied.statusCode).toBe(201);
+      expect(copied.json()).toEqual([{ ...storedNode, alternativeGroupId: 'group-1' }, clonedNode]);
+      expect(copyCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        id: nodeId,
+        expectedRevision: 1,
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('activates an alternative, mapping a node with no alternative group to 400', async () => {
+    const notInGroupId = '66666666-6666-4666-8666-666666666666';
+    const activateCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async activateAlternative(context: unknown, id: string) {
+          activateCalls.push({ context, id });
+          if (id === notInGroupId) throw new BudgetGraphNotAlternativeError(id);
+          return [storedNode];
+        },
+      },
+    } as never);
+
+    try {
+      const activated = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/activate-alternative`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const notInGroup = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${notInGroupId}/activate-alternative`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(activated.statusCode).toBe(200);
+      expect(activated.json()).toEqual([storedNode]);
+      expect(notInGroup.statusCode).toBe(400);
+      expect(activateCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: nodeId },
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: notInGroupId },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('budget templates', () => {
+  const authenticator: SessionAuthenticator = {
+    async authenticate() {
+      return {
+        userId: 'user-a',
+        membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+      };
+    },
+  };
+  const template = { id: '11111111-1111-4111-8111-111111111111', name: 'Стандартный цех', nodeType: 'workshop', plannedAmount: '5000.00' };
+
+  it('rejects unauthenticated access to every template endpoint', async () => {
+    const app = await createApiApp();
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/v1/budget-templates',
+        payload: { name: 'X', nodeType: 'workshop', plannedAmount: '1.00' },
+      });
+      const list = await app.inject({ method: 'GET', url: '/v1/budget-templates' });
+      const del = await app.inject({ method: 'DELETE', url: `/v1/budget-templates/${template.id}` });
+
+      expect(create.statusCode).toBe(401);
+      expect(list.statusCode).toBe(401);
+      expect(del.statusCode).toBe(401);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates, lists, and deletes a template', async () => {
+    const createCalls: unknown[] = [];
+    const deleteCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetTemplateRepository: {
+        async createTemplate(context: unknown, input: unknown) {
+          createCalls.push({ context, input });
+          return template;
+        },
+        async listTemplates() {
+          return [template];
+        },
+        async deleteTemplate(context: unknown, id: unknown) {
+          deleteCalls.push({ context, id });
+          return id === template.id;
+        },
+      },
+    } as never);
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/v1/budget-templates',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'Стандартный цех', nodeType: 'workshop', plannedAmount: '5000.00' },
+      });
+      const list = await app.inject({
+        method: 'GET',
+        url: '/v1/budget-templates',
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const del = await app.inject({
+        method: 'DELETE',
+        url: `/v1/budget-templates/${template.id}`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const delMissing = await app.inject({
+        method: 'DELETE',
+        url: '/v1/budget-templates/22222222-2222-4222-8222-222222222222',
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(create.statusCode).toBe(201);
+      expect(create.json()).toEqual(template);
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        input: { name: 'Стандартный цех', nodeType: 'workshop', plannedAmount: '5000.00' },
+      }]);
+      expect(list.statusCode).toBe(200);
+      expect(list.json()).toEqual([template]);
+      expect(del.statusCode).toBe(200);
+      expect(del.json()).toEqual({ deleted: true });
+      expect(delMissing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects an invalid template payload', async () => {
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetTemplateRepository: {
+        async createTemplate() {
+          throw new Error('not used in this test');
+        },
+      },
+    } as never);
+
+    try {
+      const missingName = await app.inject({
+        method: 'POST',
+        url: '/v1/budget-templates',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { nodeType: 'workshop', plannedAmount: '1.00' },
+      });
+      const badNodeType = await app.inject({
+        method: 'POST',
+        url: '/v1/budget-templates',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'X', nodeType: 'not-a-type', plannedAmount: '1.00' },
+      });
+
+      expect(missingName.statusCode).toBe(400);
+      expect(badNodeType.statusCode).toBe(400);
     } finally {
       await app.close();
     }
