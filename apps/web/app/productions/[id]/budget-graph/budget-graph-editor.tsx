@@ -48,16 +48,31 @@ const CHILD_TYPE: Record<BudgetGraphNodeType, BudgetGraphNodeType | null> = {
   material: null,
 };
 
+/**
+ * Compares a node's own planned amount against its rolled-up subtree total
+ * (both already computed, no WorkshopTask involved — unlike the "agreed
+ * sum" color indicator in the plan, which is still gated on an unconfirmed
+ * multi-assignee WorkshopTask model). Explicit rule from the user: over ->
+ * red, exact match -> green; under is left unstyled (not specified).
+ */
+function budgetVarianceClass(node: StoredBudgetGraphNode): string {
+  const planned = Number(node.plannedAmount);
+  const subtree = Number(node.subtreeTotal);
+  if (subtree > planned) return ' graph-node--over-budget';
+  if (subtree === planned) return ' graph-node--on-budget';
+  return '';
+}
+
 function BudgetGraphNodeCard({ data, selected }: NodeProps) {
   const node = data as unknown as StoredBudgetGraphNode;
   return (
     <div
-      className={`graph-node${selected ? ' graph-node--selected' : ''}`}
+      className={`graph-node${selected ? ' graph-node--selected' : ''}${budgetVarianceClass(node)}`}
       tabIndex={0}
       role="group"
       aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}`}
     >
-      <Handle type="target" position={Position.Top} />
+      <Handle type="target" position={Position.Left} />
       <span className="graph-node__type">{NODE_TYPE_LABEL[node.nodeType]}</span>
       <strong className="graph-node__title">{node.title}</strong>
       <div className="graph-node__stats">
@@ -70,7 +85,7 @@ function BudgetGraphNodeCard({ data, selected }: NodeProps) {
           <span className="graph-node__stat-value">{node.subtreeTotal} ₽</span>
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} />
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }

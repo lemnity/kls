@@ -1910,3 +1910,23 @@ input:focus-visible,
   font-weight: 800;
   color: var(--color-accent-dark);
 }
+
+/* Variance between a node's own planned amount and its rolled-up subtree
+   total — a left accent stripe so it reads at a glance without fighting
+   the all-around selection border. Explicit user rule: over -> red, exact
+   match -> green; under is intentionally left unstyled (not specified). */
+.graph-node--over-budget {
+  border-left: 4px solid var(--color-danger);
+}
+
+.graph-node--over-budget .graph-node__stat--total .graph-node__stat-value {
+  color: var(--color-danger);
+}
+
+.graph-node--on-budget {
+  border-left: 4px solid var(--color-success);
+}
+
+.graph-node--on-budget .graph-node__stat--total .graph-node__stat-value {
+  color: var(--color-success);
+}
