@@ -38,6 +38,12 @@ jobs:
       - run: npm run lint
       - run: npm run validate --workspace @kulisa/db
       - run: npm run migrate:deploy --workspace @kulisa/db
+      # @kulisa/domain, @kulisa/config, @kulisa/auth and @kulisa/db are
+      # consumed by other workspaces (e.g. apps/api) through their built
+      # dist/ output (see each package's "exports" field), not source —
+      # so those four must be built before anything that imports them can
+      # even resolve, including the test run below.
+      - run: npm run build --workspace @kulisa/domain --workspace @kulisa/config --workspace @kulisa/auth --workspace @kulisa/db
       - run: npm test
       - run: npm run test:integration --workspace @kulisa/db
       - run: npm run typecheck
