@@ -90,6 +90,12 @@ export default async function ProductionDetailPage({ params }: { params: Promise
                 </Link>
               )}
             </div>
+            {budget && (
+              <p className="budget-graph-notice muted">
+                Конструктор узлов — отдельный инструмент планирования; суммы в нём не связаны с этой сметой и
+                считаются независимо.
+              </p>
+            )}
             {budget ? (
               <BudgetView budget={budget} />
             ) : (
