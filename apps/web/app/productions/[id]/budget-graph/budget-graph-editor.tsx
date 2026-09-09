@@ -119,11 +119,11 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
         id: node.id,
         type: 'budgetNode',
         position: { x: Number(node.positionX), y: Number(node.positionY) },
-        // Height is intentionally not forced here: the card's content
-        // (title + two stat rows) dictates its real height, so a stale
-        // stored height never clips it — width is still fixed for a
-        // predictable canvas layout.
-        style: { width: Number(node.width) },
+        // Neither dimension is forced as an exact pixel box: the card is
+        // responsive to its own content (title length, digit count in the
+        // amounts) so it never clips or wraps awkwardly. Stored width only
+        // sets a floor, keeping the canvas grid roughly predictable.
+        style: { minWidth: Number(node.width) },
         data: node as unknown as Record<string, unknown>,
         selected: node.id === selectedId,
       })),
@@ -204,9 +204,10 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
         await load();
         return;
       }
-      const updated = (await response.json()) as StoredBudgetGraphNode;
-      setItems((current) => current.map((node) => (node.id === updated.id ? updated : node)));
-      setError(null);
+      // A changed planned amount shifts the subtree total of every ancestor
+      // up to the root, not just this node's own record — a full reload
+      // (not a single-item patch) is what keeps those in sync.
+      await load();
     } finally {
       setSaving(false);
     }

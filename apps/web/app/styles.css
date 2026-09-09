@@ -1828,6 +1828,17 @@ input:focus-visible,
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-soft);
   cursor: grab;
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.graph-node:hover {
+  box-shadow: var(--shadow-card);
+  transform: translateY(-2px);
+}
+
+.graph-node:active {
+  cursor: grabbing;
+  transform: translateY(0);
 }
 
 .graph-node:focus-visible,
@@ -1860,30 +1871,38 @@ input:focus-visible,
   overflow-wrap: break-word;
 }
 
+/* A two-column grid (not flex space-between per row) so the "План" and
+   "Сумма ветви" rows share one label column width and one value column —
+   without it, the longer "Сумма ветви" label wraps onto its own line while
+   "План" doesn't, and the two rows visibly stop lining up. */
 .graph-node__stats {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  row-gap: 4px;
   padding-top: 6px;
   border-top: 1px solid var(--color-border);
 }
 
 .graph-node__stat {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  display: contents;
 }
 
 .graph-node__stat-label {
+  grid-column: 1;
+  align-self: baseline;
   font-size: 0.7rem;
   color: var(--color-text-soft);
+  white-space: nowrap;
 }
 
 .graph-node__stat-value {
+  grid-column: 2;
+  align-self: baseline;
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--color-text-muted);
+  text-align: right;
   white-space: nowrap;
 }
 
