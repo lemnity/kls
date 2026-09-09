@@ -312,8 +312,14 @@ describeIntegration('PostgresBudgetGraphRepository', () => {
     expect(result?.deletedIds.sort()).toEqual([work.id, workshop.id].sort());
     const remaining = await repository.listNodes(fixture.context, fixture.budgetVersionId);
     expect(remaining.map((node) => node.id)).toEqual([root.id]);
+    // Scoped to this test's own node — kulisa_dev is a shared, persistent
+    // dev database with real concurrent usage, so an unscoped count(*)
+    // here would also pick up audit events from outside this test.
     await expect(
-      client.query('SELECT count(*)::int AS count FROM audit_events WHERE action = \'budget_graph_node.deleted\''),
+      client.query(
+        "SELECT count(*)::int AS count FROM audit_events WHERE action = 'budget_graph_node.deleted' AND subject_id = $1",
+        [workshop.id],
+      ),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
   });
 

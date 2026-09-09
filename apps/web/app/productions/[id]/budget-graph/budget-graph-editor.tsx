@@ -102,6 +102,13 @@ const NODE_TYPE_LABEL: Record<BudgetGraphNodeType, string> = {
   material: 'Материал',
 };
 
+const CHILD_TYPE_LABEL_PLURAL: Record<BudgetGraphNodeType, string> = {
+  production: 'Спектакли',
+  workshop: 'Отделы',
+  work: 'Работы',
+  material: 'Материалы',
+};
+
 const CHILD_TYPE: Record<BudgetGraphNodeType, BudgetGraphNodeType | null> = {
   production: 'workshop',
   workshop: 'work',
@@ -195,6 +202,10 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [templates, setTemplates] = useState<StoredBudgetTemplate[]>([]);
   const [saveAsTemplate, setSaveAsTemplate] = useState(false);
   const [copyingBranch, setCopyingBranch] = useState(false);
+  const [childTitle, setChildTitle] = useState('');
+  const [childAmount, setChildAmount] = useState('0.00');
+  const [childWorkshopId, setChildWorkshopId] = useState('');
+  const [childCreating, setChildCreating] = useState(false);
 
   const selectedNode = items.find((item) => item.id === selectedId) ?? null;
 
@@ -203,6 +214,9 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       setEditTitle(selectedNode.title);
       setEditAmount(selectedNode.plannedAmount);
     }
+    setChildTitle('');
+    setChildAmount('0.00');
+    setChildWorkshopId('');
   }, [selectedNode?.id, selectedNode?.title, selectedNode?.plannedAmount]);
 
   const load = useCallback(async () => {
@@ -427,6 +441,42 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       return;
     }
     await load();
+  }
+
+  async function handleCreateChild(): Promise<void> {
+    if (!selectedNode || childCreating) return;
+    const childType = CHILD_TYPE[selectedNode.nodeType];
+    if (!childType) return;
+
+    setChildCreating(true);
+    try {
+      const response = await fetch(`/api/proxy/budget-versions/${budgetVersionId}/graph-nodes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          nodeType: childType,
+          title: childTitle,
+          plannedAmount: childAmount,
+          positionX: (Math.random() * 400).toFixed(2),
+          positionY: (Math.random() * 400).toFixed(2),
+          width: '180.00',
+          height: '90.00',
+          parentId: selectedNode.id,
+          ...(childType === 'workshop' && childWorkshopId ? { workshopId: childWorkshopId } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        setError(payload?.message ?? 'Не удалось создать узел.');
+        return;
+      }
+      setChildTitle('');
+      setChildAmount('0.00');
+      setChildWorkshopId('');
+      await load();
+    } finally {
+      setChildCreating(false);
+    }
   }
 
   async function handleCreate(event: React.FormEvent): Promise<void> {
@@ -779,6 +829,79 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
               <p className="muted">
                 Согласовано (принятые задачи цеха): <strong>{selectedNode.approvedTotal} ₽</strong>
               </p>
+            )}
+
+            {CHILD_TYPE[selectedNode.nodeType] !== null && (
+              <div className="budget-graph__side-panel-section">
+                <h3>{CHILD_TYPE_LABEL_PLURAL[CHILD_TYPE[selectedNode.nodeType]!]}</h3>
+                {items.filter((node) => node.parentId === selectedNode.id).length === 0 ? (
+                  <p className="muted">Пока не добавлено ни одного узла — распределите сумму ниже.</p>
+                ) : (
+                  <ul className="budget-graph__children-list">
+                    {items
+                      .filter((node) => node.parentId === selectedNode.id)
+                      .map((child) => (
+                        <li key={child.id} className="budget-graph__children-row">
+                          <button
+                            type="button"
+                            className="budget-graph__children-name"
+                            onClick={() => setSelectedId(child.id)}
+                          >
+                            {child.title}
+                          </button>
+                          <span
+                            className={
+                              budgetVarianceKind(child) === 'over' ? 'budget-graph__variance-value--over' : undefined
+                            }
+                          >
+                            {child.plannedAmount} ₽
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+                <div className="budget-graph__child-create">
+                  <label className="budget-graph__side-panel-field">
+                    <span>Название</span>
+                    <input
+                      type="text"
+                      placeholder="Название"
+                      value={childTitle}
+                      onChange={(event) => setChildTitle(event.target.value)}
+                    />
+                  </label>
+                  <label className="budget-graph__side-panel-field">
+                    <span>Плановая сумма, ₽</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={childAmount}
+                      onChange={(event) => setChildAmount(event.target.value)}
+                    />
+                  </label>
+                  {CHILD_TYPE[selectedNode.nodeType] === 'workshop' && (
+                    <label className="budget-graph__side-panel-field">
+                      <span>Цех</span>
+                      <select value={childWorkshopId} onChange={(event) => setChildWorkshopId(event.target.value)}>
+                        <option value="">Связать с цехом (для задач)…</option>
+                        {workshops.map((workshop) => (
+                          <option key={workshop.id} value={workshop.id}>
+                            {workshop.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--accent btn-pill--small"
+                    disabled={!childTitle || childCreating}
+                    onClick={handleCreateChild}
+                  >
+                    {childCreating ? 'Добавляем…' : `Добавить: ${NODE_TYPE_LABEL[CHILD_TYPE[selectedNode.nodeType]!]}`}
+                  </button>
+                </div>
+              </div>
             )}
 
             {selectedNode.alternativeGroupId !== null && (

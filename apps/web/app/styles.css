@@ -2088,6 +2088,42 @@ input:focus-visible,
   font-size: 0.85rem;
 }
 
+.budget-graph__children-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.budget-graph__children-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.budget-graph__children-name {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-accent);
+  font: 700 0.85rem/1.3 var(--font-sans);
+  cursor: pointer;
+}
+
+.budget-graph__child-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--color-border);
+}
+
 /* An alternative branch that lost the comparison — kept on the canvas
    (so the two options stay visible side by side) but visually receded,
    since only the active branch counts toward ancestor totals. */
