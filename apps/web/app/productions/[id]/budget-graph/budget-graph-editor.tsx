@@ -73,6 +73,18 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [formTitle, setFormTitle] = useState('');
   const [formAmount, setFormAmount] = useState('0.00');
   const [formParentId, setFormParentId] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [editAmount, setEditAmount] = useState('0.00');
+  const [saving, setSaving] = useState(false);
+
+  const selectedNode = items.find((item) => item.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (selectedNode) {
+      setEditTitle(selectedNode.title);
+      setEditAmount(selectedNode.plannedAmount);
+    }
+  }, [selectedNode?.id, selectedNode?.title, selectedNode?.plannedAmount]);
 
   const load = useCallback(async () => {
     const response = await fetch(`/api/proxy/budget-versions/${budgetVersionId}/graph-nodes`);
@@ -152,6 +164,35 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       return;
     }
     await load();
+  }
+
+  async function handleUpdateDetails(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!selectedNode) return;
+
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/details`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          expectedRevision: selectedNode.revision,
+          title: editTitle,
+          plannedAmount: editAmount,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+        setError(payload?.message ?? 'Не удалось сохранить узел — карта могла измениться. Обновляем данные.');
+        await load();
+        return;
+      }
+      const updated = (await response.json()) as StoredBudgetGraphNode;
+      setItems((current) => current.map((node) => (node.id === updated.id ? updated : node)));
+      setError(null);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleDelete(): Promise<void> {
@@ -253,20 +294,45 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
           <button
             type="button"
             className="btn-pill btn-pill--ghost"
-            disabled={!selectedId}
-            onClick={handleDelete}
-          >
-            Удалить выбранный узел
-          </button>
-          <button
-            type="button"
-            className="btn-pill btn-pill--ghost"
             onClick={() => setViewMode(viewMode === 'canvas' ? 'table' : 'canvas')}
           >
             {viewMode === 'canvas' ? 'Табличный вид' : 'Канвас'}
           </button>
         </div>
       </div>
+
+      {selectedNode && (
+        <form className="budget-graph__edit-panel" onSubmit={handleUpdateDetails}>
+          <span className="graph-node__type">{NODE_TYPE_LABEL[selectedNode.nodeType]}</span>
+          <label>
+            <span className="sr-only">Название узла</span>
+            <input
+              type="text"
+              value={editTitle}
+              onChange={(event) => setEditTitle(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            <span className="sr-only">Плановая сумма</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={editAmount}
+              onChange={(event) => setEditAmount(event.target.value)}
+            />
+          </label>
+          <button type="submit" className="btn-pill btn-pill--accent" disabled={saving}>
+            Сохранить
+          </button>
+          <button type="button" className="btn-pill btn-pill--ghost" disabled={saving} onClick={handleDelete}>
+            Удалить узел
+          </button>
+          <button type="button" className="btn-pill btn-pill--ghost" onClick={() => setSelectedId(null)}>
+            Снять выделение
+          </button>
+        </form>
+      )}
 
       {error && (
         <p role="alert" className="task-row__error">

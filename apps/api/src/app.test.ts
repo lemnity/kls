@@ -2739,6 +2739,63 @@ describe('budget graph', () => {
     }
   });
 
+  it('updates a node title and planned amount, mapping a revision conflict to 409', async () => {
+    const detailsCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      budgetGraphRepository: {
+        async updateNodeDetails(context: unknown, id: string, expectedRevision: number, details: unknown) {
+          detailsCalls.push({ context, id, expectedRevision, details });
+          if (expectedRevision === 1) return { ...storedNode, title: 'Обновлено', plannedAmount: '500.00', revision: 2 };
+          throw new BudgetGraphRevisionConflictError(nodeId, expectedRevision);
+        },
+      },
+    } as never);
+
+    try {
+      const updated = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/details`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1, title: 'Обновлено', plannedAmount: '500.00' },
+      });
+      const conflict = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/details`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 99, title: 'Обновлено', plannedAmount: '500.00' },
+      });
+      const invalidPayload = await app.inject({
+        method: 'PATCH',
+        url: `/v1/budget-graph-nodes/${nodeId}/details`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { expectedRevision: 1, title: '', plannedAmount: '500.00' },
+      });
+
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json()).toMatchObject({ title: 'Обновлено', plannedAmount: '500.00', revision: 2 });
+      expect(conflict.statusCode).toBe(409);
+      expect(invalidPayload.statusCode).toBe(400);
+      expect(detailsCalls).toEqual([
+        {
+          context: expect.objectContaining({ tenantId: 'tenant-a' }),
+          id: nodeId,
+          expectedRevision: 1,
+          details: { expectedRevision: 1, title: 'Обновлено', plannedAmount: '500.00' },
+        },
+        {
+          context: expect.objectContaining({ tenantId: 'tenant-a' }),
+          id: nodeId,
+          expectedRevision: 99,
+          details: { expectedRevision: 99, title: 'Обновлено', plannedAmount: '500.00' },
+        },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('reparents a node, mapping a cycle to 400', async () => {
     const app = await createApiApp({
       sessionAuthenticator: authenticator,

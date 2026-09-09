@@ -202,6 +202,48 @@ describeIntegration('PostgresBudgetGraphRepository', () => {
     ).rejects.toBeInstanceOf(BudgetGraphRevisionConflictError);
   });
 
+  it('updates a node title and planned amount, recomputing subtree totals, rejecting a stale expectedRevision', async () => {
+    const fixture = await createFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetGraphRepository(client);
+    const node = await repository.createNode(fixture.context, fixture.budgetVersionId, {
+      nodeType: 'production',
+      title: 'Ревизор',
+      plannedAmount: '1000.00',
+      ...LAYOUT,
+    });
+
+    const updated = await repository.updateNodeDetails(fixture.context, node.id, 1, {
+      title: 'Ревизор (обновлено)',
+      plannedAmount: '2500.00',
+    });
+    expect(updated).toMatchObject({
+      title: 'Ревизор (обновлено)',
+      plannedAmount: '2500.00',
+      subtreeTotal: '2500.00',
+      revision: 2,
+    });
+
+    await expect(
+      repository.updateNodeDetails(fixture.context, node.id, 1, { title: 'X', plannedAmount: '0.00' }),
+    ).rejects.toBeInstanceOf(BudgetGraphRevisionConflictError);
+  });
+
+  it('returns null when updating details of a node outside the tenant', async () => {
+    const tenantA = await createFixture(client, 'Tenant A');
+    const tenantB = await createFixture(client, 'Tenant B');
+    const repository = new PostgresBudgetGraphRepository(client);
+    const foreignNode = await repository.createNode(tenantB.context, tenantB.budgetVersionId, {
+      nodeType: 'production',
+      title: 'Foreign',
+      plannedAmount: '0.00',
+      ...LAYOUT,
+    });
+
+    await expect(
+      repository.updateNodeDetails(tenantA.context, foreignNode.id, 1, { title: 'X', plannedAmount: '0.00' }),
+    ).resolves.toBeNull();
+  });
+
   it('reparents a node to a sibling branch of the same level, rejecting a cycle', async () => {
     const fixture = await createFixture(client, 'Tenant A');
     const repository = new PostgresBudgetGraphRepository(client);

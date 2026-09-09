@@ -222,6 +222,34 @@ export class PostgresBudgetGraphRepository {
     return this.withSubtreeTotal(context, result.rows[0]!);
   }
 
+  public async updateNodeDetails(
+    context: TenantContext,
+    nodeId: string,
+    expectedRevision: number,
+    details: { title: string; plannedAmount: string },
+  ): Promise<StoredBudgetGraphNode | null> {
+    const current = await this.requireCurrentRevision(context, nodeId, expectedRevision);
+    if (current === null) return null;
+
+    const result = await this.client.query<NodeRow>(
+      `WITH updated AS (
+         UPDATE budget_graph_nodes
+         SET title = $3, planned_amount = $4::numeric, revision = revision + 1, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING ${NODE_RAW_COLUMNS}
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $5, $2, $6, 'budget_graph_node.updated', 'budget_graph_node', id,
+           jsonb_build_object('title', $3, 'plannedAmount', $4::numeric)
+         FROM updated
+       )
+       SELECT ${NODE_COLUMNS} FROM updated`,
+      [nodeId, context.tenantId, details.title, details.plannedAmount, randomUUID(), context.membershipId],
+    );
+
+    return this.withSubtreeTotal(context, result.rows[0]!);
+  }
+
   public async reparentNode(
     context: TenantContext,
     nodeId: string,
