@@ -24,6 +24,7 @@ export interface StoredBudgetGraphNode {
   title: string;
   plannedAmount: string;
   subtreeTotal: string;
+  approvedTotal: string | null;
   positionX: string;
   positionY: string;
   width: string;
@@ -198,7 +199,12 @@ export class PostgresBudgetGraphRepository {
     );
 
     const totals = await this.subtreeTotals(context, budgetVersionId);
-    return result.rows.map((row) => toStoredNode(row, totals.get(row.id) ?? '0.00'));
+    const approved = await this.approvedTotals(context, budgetVersionId);
+    return result.rows.map((row) => toStoredNode(
+      row,
+      totals.get(row.id) ?? '0.00',
+      row.nodeType === 'workshop' ? approved.get(row.id) ?? '0.00' : null,
+    ));
   }
 
   public async moveNode(
@@ -371,7 +377,12 @@ export class PostgresBudgetGraphRepository {
 
   private async withSubtreeTotal(context: TenantContext, row: NodeRow): Promise<StoredBudgetGraphNode> {
     const totals = await this.subtreeTotals(context, row.budgetVersionId);
-    return toStoredNode(row, totals.get(row.id) ?? '0.00');
+    let approvedTotal: string | null = null;
+    if (row.nodeType === 'workshop') {
+      const approved = await this.approvedTotals(context, row.budgetVersionId);
+      approvedTotal = approved.get(row.id) ?? '0.00';
+    }
+    return toStoredNode(row, totals.get(row.id) ?? '0.00', approvedTotal);
   }
 
   /**
@@ -408,9 +419,37 @@ export class PostgresBudgetGraphRepository {
     }
     return totals;
   }
+
+  /**
+   * Согласованная сумма: sum of `planned_amount` for workshop-tasks that
+   * were created directly against this graph node and whose lead decision
+   * was 'approved'. Only meaningful for `workshop`-type nodes.
+   */
+  private async approvedTotals(context: TenantContext, budgetVersionId: string): Promise<Map<string, string>> {
+    const result = await this.client.query<{ graphNodeId: string; plannedAmount: string }>(
+      `SELECT t.graph_node_id AS "graphNodeId", t.planned_amount AS "plannedAmount"
+       FROM workshop_tasks t
+       JOIN budget_graph_nodes n ON n.id = t.graph_node_id AND n.tenant_id = t.tenant_id
+       WHERE t.tenant_id = $1 AND n.budget_version_id = $2 AND t.status = 'approved'`,
+      [context.tenantId, budgetVersionId],
+    );
+
+    const byNode = new Map<string, string[]>();
+    for (const row of result.rows) {
+      const amounts = byNode.get(row.graphNodeId) ?? [];
+      amounts.push(row.plannedAmount);
+      byNode.set(row.graphNodeId, amounts);
+    }
+
+    const totals = new Map<string, string>();
+    for (const [nodeId, amounts] of byNode) {
+      totals.set(nodeId, sumMoney(amounts));
+    }
+    return totals;
+  }
 }
 
-function toStoredNode(row: NodeRow, subtreeTotal: string): StoredBudgetGraphNode {
+function toStoredNode(row: NodeRow, subtreeTotal: string, approvedTotal: string | null): StoredBudgetGraphNode {
   return {
     id: row.id,
     budgetVersionId: row.budgetVersionId,
@@ -420,6 +459,7 @@ function toStoredNode(row: NodeRow, subtreeTotal: string): StoredBudgetGraphNode
     title: row.title,
     plannedAmount: row.plannedAmount,
     subtreeTotal,
+    approvedTotal,
     positionX: row.positionX,
     positionY: row.positionY,
     width: row.width,

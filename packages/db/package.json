@@ -39,6 +39,10 @@
     "./budget-graph-repository": {
       "types": "./dist/postgres-budget-graph-repository.d.ts",
       "default": "./dist/postgres-budget-graph-repository.js"
+    },
+    "./node-attachment-repository": {
+      "types": "./dist/s3-node-attachment-repository.d.ts",
+      "default": "./dist/s3-node-attachment-repository.js"
     }
   },
   "scripts": {
@@ -52,6 +56,8 @@
     "seed:demo": "tsx src/seed-demo.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "3.1128.0",
+    "@aws-sdk/s3-request-presigner": "3.1128.0",
     "@kulisa/auth": "file:../auth",
     "@kulisa/domain": "file:../domain",
     "pg": "8.23.0"

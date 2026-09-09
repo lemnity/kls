@@ -28,11 +28,62 @@ interface StoredBudgetGraphNode {
   title: string;
   plannedAmount: string;
   subtreeTotal: string;
+  approvedTotal: string | null;
   positionX: string;
   positionY: string;
   width: string;
   height: string;
   revision: number;
+}
+
+type TaskAssigneeStatus = 'pending' | 'done';
+type TaskLeadDecision = 'approved' | 'rejected';
+
+interface StoredTaskAssignee {
+  membershipId: string;
+  displayName: string;
+  status: TaskAssigneeStatus;
+  completedAt: string | null;
+}
+
+interface StoredWorkshopTaskWithAssignees {
+  id: string;
+  graphNodeId: string | null;
+  status: string;
+  description: string;
+  plannedAmount: string | null;
+  completedAt: string | null;
+  assignees: StoredTaskAssignee[];
+}
+
+interface StoredNodeAttachment {
+  id: string;
+  nodeId: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: string;
+  uploadedByMembershipId: string;
+  createdAt: string;
+}
+
+interface MembershipListItem {
+  id: string;
+  userEmail: string;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  new: 'На согласовании',
+  approved: 'Принято',
+  rejected: 'Отклонено',
+};
+
+function formatFileSize(sizeBytes: string): string {
+  const bytes = Number(sizeBytes);
+  if (!Number.isFinite(bytes)) return sizeBytes;
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
 const NODE_TYPE_LABEL: Record<BudgetGraphNodeType, string> = {
@@ -85,6 +136,12 @@ function BudgetGraphNodeCard({ data, selected }: NodeProps) {
           <span className="graph-node__stat-label">Сумма ветви</span>
           <span className="graph-node__stat-value">{node.subtreeTotal} ₽</span>
         </div>
+        {node.approvedTotal !== null && (
+          <div className="graph-node__stat">
+            <span className="graph-node__stat-label">Согласовано</span>
+            <span className="graph-node__stat-value">{node.approvedTotal} ₽</span>
+          </div>
+        )}
       </div>
       <Handle type="source" position={Position.Right} />
     </div>
@@ -102,9 +159,18 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [formTitle, setFormTitle] = useState('');
   const [formAmount, setFormAmount] = useState('0.00');
   const [formParentId, setFormParentId] = useState('');
+  const [formWorkshopId, setFormWorkshopId] = useState('');
+  const [workshops, setWorkshops] = useState<{ id: string; name: string }[]>([]);
   const [editTitle, setEditTitle] = useState('');
   const [editAmount, setEditAmount] = useState('0.00');
   const [saving, setSaving] = useState(false);
+  const [tasks, setTasks] = useState<StoredWorkshopTaskWithAssignees[]>([]);
+  const [attachments, setAttachments] = useState<StoredNodeAttachment[]>([]);
+  const [memberships, setMemberships] = useState<MembershipListItem[]>([]);
+  const [taskDescription, setTaskDescription] = useState('');
+  const [taskAmount, setTaskAmount] = useState('0.00');
+  const [taskAssigneeIds, setTaskAssigneeIds] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   const selectedNode = items.find((item) => item.id === selectedId) ?? null;
 
@@ -128,6 +194,35 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   useEffect(() => {
     load().finally(() => setLoading(false));
   }, [load]);
+
+  useEffect(() => {
+    fetch('/api/proxy/organization/memberships')
+      .then((response) => (response.ok ? (response.json() as Promise<MembershipListItem[]>) : []))
+      .then((list) => setMemberships(list.filter((membership) => membership.status === 'ACTIVE')))
+      .catch(() => setMemberships([]));
+    fetch('/api/proxy/organization/workshops')
+      .then((response) => (response.ok ? (response.json() as Promise<{ id: string; name: string; isActive: boolean }[]>) : []))
+      .then((list) => setWorkshops(list.filter((workshop) => workshop.isActive)))
+      .catch(() => setWorkshops([]));
+  }, []);
+
+  const loadWorkshopExtras = useCallback(async (nodeId: string) => {
+    const [tasksResponse, attachmentsResponse] = await Promise.all([
+      fetch(`/api/proxy/budget-graph-nodes/${nodeId}/tasks`),
+      fetch(`/api/proxy/budget-graph-nodes/${nodeId}/attachments`),
+    ]);
+    setTasks(tasksResponse.ok ? ((await tasksResponse.json()) as StoredWorkshopTaskWithAssignees[]) : []);
+    setAttachments(attachmentsResponse.ok ? ((await attachmentsResponse.json()) as StoredNodeAttachment[]) : []);
+  }, []);
+
+  useEffect(() => {
+    if (selectedNode?.nodeType === 'workshop') {
+      loadWorkshopExtras(selectedNode.id);
+    } else {
+      setTasks([]);
+      setAttachments([]);
+    }
+  }, [selectedNode?.id, selectedNode?.nodeType, loadWorkshopExtras]);
 
   const flowNodes: Node[] = useMemo(
     () =>
@@ -292,6 +387,7 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
         width: '180.00',
         height: '90.00',
         ...(parent ? { parentId: parent.id } : {}),
+        ...(nodeType === 'workshop' && formWorkshopId ? { workshopId: formWorkshopId } : {}),
       }),
     });
     if (!response.ok) {
@@ -301,12 +397,133 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
     }
     setFormTitle('');
     setFormAmount('0.00');
+    setFormWorkshopId('');
     await load();
+  }
+
+  function toggleTaskAssignee(membershipId: string): void {
+    setTaskAssigneeIds((current) =>
+      current.includes(membershipId)
+        ? current.filter((id) => id !== membershipId)
+        : [...current, membershipId],
+    );
+  }
+
+  async function handleCreateTask(): Promise<void> {
+    if (!selectedNode || taskAssigneeIds.length === 0) {
+      setError('Выберите хотя бы одного исполнителя.');
+      return;
+    }
+
+    const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        description: taskDescription,
+        plannedAmount: taskAmount,
+        assigneeMembershipIds: taskAssigneeIds,
+      }),
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      setError(payload?.message ?? 'Не удалось создать задачу.');
+      return;
+    }
+    setTaskDescription('');
+    setTaskAmount('0.00');
+    setTaskAssigneeIds([]);
+    await loadWorkshopExtras(selectedNode.id);
+  }
+
+  async function handleMarkAssigneeDone(taskId: string, membershipId: string): Promise<void> {
+    if (!selectedNode) return;
+    const response = await fetch(`/api/proxy/workshop-tasks/${taskId}/assignees/${membershipId}/done`, {
+      method: 'POST',
+    });
+    if (!response.ok) {
+      setError('Не удалось отметить выполнение.');
+      return;
+    }
+    await loadWorkshopExtras(selectedNode.id);
+  }
+
+  async function handleLeadDecision(taskId: string, decision: TaskLeadDecision): Promise<void> {
+    if (!selectedNode) return;
+    const response = await fetch(`/api/proxy/workshop-tasks/${taskId}/lead-decision`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    });
+    if (!response.ok) {
+      setError('Не удалось зафиксировать решение по задаче.');
+      return;
+    }
+    // A lead decision changes the node's "Согласовано" total — a full
+    // reload keeps that stat (shown on the canvas card) in sync, same as
+    // handleUpdateDetails does for subtreeTotal.
+    await Promise.all([loadWorkshopExtras(selectedNode.id), load()]);
+  }
+
+  async function handleFileUpload(event: React.ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !selectedNode) return;
+
+    setUploading(true);
+    try {
+      const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/attachments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fileName: file.name, contentType: file.type || 'application/octet-stream', sizeBytes: file.size }),
+      });
+      if (!response.ok) {
+        setError('Не удалось подготовить загрузку файла.');
+        return;
+      }
+      const { uploadUrl } = (await response.json()) as { uploadUrl: string };
+      const uploaded = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'content-type': file.type || 'application/octet-stream' },
+        body: file,
+      });
+      if (!uploaded.ok) {
+        setError('Не удалось загрузить файл в хранилище.');
+        return;
+      }
+      await loadWorkshopExtras(selectedNode.id);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleDownloadAttachment(attachmentId: string): Promise<void> {
+    if (!selectedNode) return;
+    const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/attachments/${attachmentId}/download-url`);
+    if (!response.ok) {
+      setError('Не удалось получить ссылку на файл.');
+      return;
+    }
+    const { url } = (await response.json()) as { url: string };
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  async function handleDeleteAttachment(attachmentId: string): Promise<void> {
+    if (!selectedNode) return;
+    const response = await fetch(`/api/proxy/budget-graph-nodes/${selectedNode.id}/attachments/${attachmentId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      setError('Не удалось удалить файл.');
+      return;
+    }
+    await loadWorkshopExtras(selectedNode.id);
   }
 
   if (loading) return <p className="muted">Загрузка графа…</p>;
 
   const selectableParents = items.filter((node) => CHILD_TYPE[node.nodeType] !== null);
+  const formParent = items.find((node) => node.id === formParentId);
+  const pendingNodeType: BudgetGraphNodeType = formParent ? (CHILD_TYPE[formParent.nodeType] ?? 'production') : 'production';
 
   return (
     <div className="budget-graph">
@@ -343,6 +560,19 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
               onChange={(event) => setFormAmount(event.target.value)}
             />
           </label>
+          {pendingNodeType === 'workshop' && (
+            <label>
+              <span className="sr-only">Цех</span>
+              <select value={formWorkshopId} onChange={(event) => setFormWorkshopId(event.target.value)}>
+                <option value="">Связать с цехом (для задач)…</option>
+                {workshops.map((workshop) => (
+                  <option key={workshop.id} value={workshop.id}>
+                    {workshop.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <button type="submit" className="btn-pill btn-pill--accent">
             Добавить узел
           </button>
@@ -396,6 +626,147 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
             <p className="muted">
               Сумма ветви (сумма листьев ниже по дереву): <strong>{selectedNode.subtreeTotal} ₽</strong>
             </p>
+            {selectedNode.approvedTotal !== null && (
+              <p className="muted">
+                Согласовано (принятые задачи цеха): <strong>{selectedNode.approvedTotal} ₽</strong>
+              </p>
+            )}
+
+            {selectedNode.nodeType === 'workshop' && (
+              <div className="budget-graph__side-panel-section">
+                <h3>Файлы</h3>
+                {attachments.length === 0 ? (
+                  <p className="muted">Файлов пока нет.</p>
+                ) : (
+                  <ul className="budget-graph__attachment-list">
+                    {attachments.map((attachment) => (
+                      <li key={attachment.id} className="budget-graph__attachment-row">
+                        <button
+                          type="button"
+                          className="budget-graph__attachment-name"
+                          onClick={() => handleDownloadAttachment(attachment.id)}
+                        >
+                          {attachment.fileName}
+                        </button>
+                        <span className="muted">{formatFileSize(attachment.sizeBytes)}</span>
+                        <button
+                          type="button"
+                          className="icon-btn icon-btn--ghost"
+                          aria-label={`Удалить файл ${attachment.fileName}`}
+                          onClick={() => handleDeleteAttachment(attachment.id)}
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <label className="btn-pill btn-pill--ghost budget-graph__file-input-label">
+                  {uploading ? 'Загрузка…' : 'Прикрепить файл'}
+                  <input type="file" onChange={handleFileUpload} disabled={uploading} hidden />
+                </label>
+              </div>
+            )}
+
+            {selectedNode.nodeType === 'workshop' && (
+              <div className="budget-graph__side-panel-section">
+                <h3>Задачи цеха</h3>
+                {tasks.length === 0 ? (
+                  <p className="muted">Задач пока нет.</p>
+                ) : (
+                  <ul className="budget-graph__task-list">
+                    {tasks.map((task) => (
+                      <li key={task.id} className="budget-graph__task-card">
+                        <div className="budget-graph__task-header">
+                          <strong>{task.description}</strong>
+                          <span className="muted">{task.plannedAmount} ₽</span>
+                        </div>
+                        <span className={`delta-pill delta-pill--${task.status === 'approved' ? 'positive' : task.status === 'rejected' ? 'negative' : 'neutral'}`}>
+                          {TASK_STATUS_LABEL[task.status] ?? task.status}
+                        </span>
+                        <ul className="budget-graph__assignee-list">
+                          {task.assignees.map((assignee) => (
+                            <li key={assignee.membershipId} className="budget-graph__assignee-row">
+                              <span className={`budget-graph__assignee-dot budget-graph__assignee-dot--${assignee.status}`} aria-hidden="true" />
+                              <span>{assignee.displayName}</span>
+                              {assignee.status === 'pending' && task.status === 'new' && (
+                                <button
+                                  type="button"
+                                  className="btn-pill btn-pill--ghost btn-pill--small"
+                                  onClick={() => handleMarkAssigneeDone(task.id, assignee.membershipId)}
+                                >
+                                  Отметить готово
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                        {task.status === 'new' && (
+                          <div className="budget-graph__task-actions">
+                            <button
+                              type="button"
+                              className="btn-pill btn-pill--accent btn-pill--small"
+                              onClick={() => handleLeadDecision(task.id, 'approved')}
+                            >
+                              Принято
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-pill btn-pill--ghost btn-pill--small"
+                              onClick={() => handleLeadDecision(task.id, 'rejected')}
+                            >
+                              Отклонено
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="budget-graph__task-create">
+                  <label className="budget-graph__side-panel-field">
+                    <span>Новая задача</span>
+                    <input
+                      type="text"
+                      placeholder="Описание"
+                      value={taskDescription}
+                      onChange={(event) => setTaskDescription(event.target.value)}
+                    />
+                  </label>
+                  <label className="budget-graph__side-panel-field">
+                    <span>Сумма, ₽</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={taskAmount}
+                      onChange={(event) => setTaskAmount(event.target.value)}
+                    />
+                  </label>
+                  <fieldset className="budget-graph__assignee-picker">
+                    <legend>Исполнители</legend>
+                    {memberships.map((membership) => (
+                      <label key={membership.id} className="budget-graph__assignee-option">
+                        <input
+                          type="checkbox"
+                          checked={taskAssigneeIds.includes(membership.id)}
+                          onChange={() => toggleTaskAssignee(membership.id)}
+                        />
+                        {membership.userEmail}
+                      </label>
+                    ))}
+                  </fieldset>
+                  <button
+                    type="button"
+                    className="btn-pill btn-pill--accent btn-pill--small"
+                    disabled={!taskDescription || taskAssigneeIds.length === 0}
+                    onClick={handleCreateTask}
+                  >
+                    Создать задачу
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="budget-graph__side-panel-actions">
               <button type="submit" className="btn-pill btn-pill--accent" disabled={saving}>

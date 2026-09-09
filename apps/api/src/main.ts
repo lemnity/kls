@@ -10,6 +10,7 @@ import { PostgresBudgetRepository } from '@kulisa/db/budget-repository';
 import { PostgresWorkshopRepository } from '@kulisa/db/workshop-repository';
 import { PostgresWorkshopTaskRepository } from '@kulisa/db/workshop-task-repository';
 import { PostgresBudgetGraphRepository } from '@kulisa/db/budget-graph-repository';
+import { S3NodeAttachmentRepository } from '@kulisa/db/node-attachment-repository';
 import { PostgresRoleRepository } from '@kulisa/db/role-repository';
 import { Pool } from 'pg';
 
@@ -38,6 +39,13 @@ const app = await createApiApp({
   workshopRepository: new PostgresWorkshopRepository(databasePool),
   workshopTaskRepository: new PostgresWorkshopTaskRepository(databasePool),
   budgetGraphRepository: new PostgresBudgetGraphRepository(databasePool),
+  nodeAttachmentRepository: new S3NodeAttachmentRepository(databasePool, {
+    endpoint: environment.s3Endpoint,
+    region: environment.s3Region,
+    accessKeyId: environment.s3AccessKey,
+    secretAccessKey: environment.s3SecretKey,
+    bucket: environment.s3Bucket,
+  }),
 });
 app.addHook('onClose', async () => databasePool.end());
 await app.listen({ host, port });

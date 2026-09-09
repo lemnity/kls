@@ -19,14 +19,21 @@ async function handle(
   if (!token) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { path } = await params;
-  const hasBody = request.method !== 'GET' && request.method !== 'DELETE';
   const search = new URL(request.url).search;
+  const bodyText =
+    request.method === 'GET' || request.method === 'DELETE' ? '' : await request.text();
+  // Some mutating endpoints (e.g. accept/lead-decision-less actions) are
+  // called with no body at all; forwarding an empty string with
+  // `content-type: application/json` anyway makes Fastify's body parser
+  // reject it ("Body cannot be empty..."), so only attach both when there
+  // actually is a body.
+  const hasBody = bodyText.length > 0;
 
   const response = await apiFetch(`/v1/${path.join('/')}${search}`, {
     method: request.method,
     token,
     headers: hasBody ? { 'content-type': 'application/json' } : {},
-    ...(hasBody ? { body: await request.text() } : {}),
+    ...(hasBody ? { body: bodyText } : {}),
   });
 
   const responseText = await response.text();

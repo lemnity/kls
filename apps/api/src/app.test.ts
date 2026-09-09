@@ -24,13 +24,17 @@ import {
   BudgetGraphRevisionConflictError,
 } from '@kulisa/db/budget-graph-repository';
 import {
+  WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
   WorkshopTaskClosedError,
+  WorkshopTaskGraphNodeNotFoundError,
+  WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
 } from '@kulisa/db/workshop-task-repository';
+import { NodeAttachmentNodeNotFoundError } from '@kulisa/db/node-attachment-repository';
 
 describe('API health endpoints', () => {
   it('returns the liveness contract without exposing infrastructure details', async () => {
@@ -1388,6 +1392,250 @@ describe('API health endpoints', () => {
 
       expect(closed.statusCode).toBe(409);
       expect(missing.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates a task on a workshop graph node with multiple assignees, lists it, and marks one assignee done', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const nodeId = '11111111-1111-4111-8111-111111111111';
+    const taskId = '22222222-2222-4222-8222-222222222222';
+    const assigneeA = '33333333-3333-4333-8333-333333333333';
+    const assigneeB = '44444444-4444-4444-8444-444444444444';
+    const createCalls: unknown[] = [];
+    const doneCalls: unknown[] = [];
+    const task = {
+      id: taskId,
+      budgetItemId: null,
+      graphNodeId: nodeId,
+      productionId: 'production-a',
+      workshopId: 'workshop-a',
+      assigneeMembershipId: null,
+      status: 'new',
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      deadlineAt: null,
+      completedAt: null,
+      assignees: [
+        { membershipId: assigneeA, displayName: 'Иванов', status: 'pending', completedAt: null },
+        { membershipId: assigneeB, displayName: 'Петров', status: 'pending', completedAt: null },
+      ],
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskForGraphNode(context: unknown, graphNodeId: unknown, input: unknown) {
+          createCalls.push({ context, graphNodeId, input });
+          return task;
+        },
+        async listGraphNodeTasks() {
+          return [task];
+        },
+        async markAssigneeDone(context: unknown, id: unknown, membershipId: unknown) {
+          doneCalls.push({ context, id, membershipId });
+          return { membershipId: assigneeA, displayName: 'Иванов', status: 'done', completedAt: '2026-09-09T00:00:00Z' };
+        },
+      },
+    } as never);
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/tasks`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: {
+          description: 'Смета на стулья',
+          plannedAmount: '1500.00',
+          assigneeMembershipIds: [assigneeA, assigneeB],
+        },
+      });
+      const list = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-graph-nodes/${nodeId}/tasks`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const done = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/assignees/${assigneeA}/done`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(create.statusCode).toBe(201);
+      expect(create.json()).toEqual(task);
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        graphNodeId: nodeId,
+        input: {
+          description: 'Смета на стулья',
+          plannedAmount: '1500.00',
+          assigneeMembershipIds: [assigneeA, assigneeB],
+        },
+      }]);
+      expect(list.statusCode).toBe(200);
+      expect(list.json()).toEqual([task]);
+      expect(done.statusCode).toBe(200);
+      expect(done.json()).toMatchObject({ membershipId: assigneeA, status: 'done' });
+      expect(doneCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: taskId, membershipId: assigneeA },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects a graph-node task without any assignee, and maps not-workshop/not-found to 400', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const missingNodeId = '11111111-1111-4111-8111-111111111111';
+    const nonWorkshopNodeId = '22222222-2222-4222-8222-222222222222';
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async createTaskForGraphNode(_: unknown, graphNodeId: string) {
+          if (graphNodeId === missingNodeId) throw new WorkshopTaskGraphNodeNotFoundError(graphNodeId);
+          throw new WorkshopTaskGraphNodeNotWorkshopError(graphNodeId);
+        },
+      },
+    } as never);
+
+    try {
+      const noAssignees = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${missingNodeId}/tasks`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { description: 'X', plannedAmount: '1.00', assigneeMembershipIds: [] },
+      });
+      const missing = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${missingNodeId}/tasks`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { description: 'X', plannedAmount: '1.00', assigneeMembershipIds: [missingNodeId] },
+      });
+      const notWorkshop = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nonWorkshopNodeId}/tasks`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { description: 'X', plannedAmount: '1.00', assigneeMembershipIds: [missingNodeId] },
+      });
+
+      expect(noAssignees.statusCode).toBe(400);
+      expect(missing.statusCode).toBe(400);
+      expect(notWorkshop.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('records a lead decision on a graph node task, mapping an already-decided task to 409', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const decidedTaskId = '11111111-1111-4111-8111-111111111111';
+    const openTaskId = '22222222-2222-4222-8222-222222222222';
+    const decisionCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopTaskRepository: {
+        async recordLeadDecision(context: unknown, id: string, decision: unknown) {
+          decisionCalls.push({ context, id, decision });
+          if (id === decidedTaskId) throw new WorkshopTaskAlreadyDecidedError(id, 'approved');
+          return {
+            id: openTaskId,
+            budgetItemId: null,
+            graphNodeId: 'node-a',
+            productionId: 'production-a',
+            workshopId: 'workshop-a',
+            assigneeMembershipId: null,
+            status: decision,
+            description: 'Смета на стулья',
+            plannedAmount: '1500.00',
+            deadlineAt: null,
+            completedAt: null,
+            assignees: [],
+          };
+        },
+      },
+    } as never);
+
+    try {
+      const invalid = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${openTaskId}/lead-decision`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { decision: 'maybe' },
+      });
+      const approved = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${openTaskId}/lead-decision`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { decision: 'approved' },
+      });
+      const alreadyDecided = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${decidedTaskId}/lead-decision`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { decision: 'rejected' },
+      });
+
+      expect(invalid.statusCode).toBe(400);
+      expect(approved.statusCode).toBe(200);
+      expect(approved.json()).toMatchObject({ id: openTaskId, status: 'approved' });
+      expect(alreadyDecided.statusCode).toBe(409);
+      expect(decisionCalls).toEqual([
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: openTaskId, decision: 'approved' },
+        { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: decidedTaskId, decision: 'rejected' },
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects unauthenticated access to every graph-node task endpoint', async () => {
+    const app = await createApiApp();
+    const nodeId = '11111111-1111-4111-8111-111111111111';
+    const taskId = '22222222-2222-4222-8222-222222222222';
+    const membershipId = '33333333-3333-4333-8333-333333333333';
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/tasks`,
+        payload: { description: 'X', plannedAmount: '1.00', assigneeMembershipIds: [membershipId] },
+      });
+      const list = await app.inject({ method: 'GET', url: `/v1/budget-graph-nodes/${nodeId}/tasks` });
+      const done = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/assignees/${membershipId}/done` });
+      const decision = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/lead-decision`,
+        payload: { decision: 'approved' },
+      });
+
+      expect(create.statusCode).toBe(401);
+      expect(list.statusCode).toBe(401);
+      expect(done.statusCode).toBe(401);
+      expect(decision.statusCode).toBe(401);
     } finally {
       await app.close();
     }
@@ -2852,6 +3100,130 @@ describe('budget graph', () => {
       expect(deleteCalls).toEqual([
         { context: expect.objectContaining({ tenantId: 'tenant-a' }), id: nodeId, expectedRevision: 3 },
       ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates an attachment upload target, lists attachments, gets a download url, and deletes one', async () => {
+    const createCalls: unknown[] = [];
+    const deleteCalls: unknown[] = [];
+    const attachmentId = '55555555-5555-4555-8555-555555555555';
+    const attachment = {
+      id: attachmentId,
+      nodeId,
+      fileName: 'смета.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: '2048',
+      uploadedByMembershipId: 'membership-a',
+      createdAt: '2026-09-09T00:00:00Z',
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      nodeAttachmentRepository: {
+        async createUploadTarget(context: unknown, id: unknown, input: unknown) {
+          createCalls.push({ context, id, input });
+          return { attachment, uploadUrl: 'https://minio.local/upload' };
+        },
+        async listAttachments() {
+          return [attachment];
+        },
+        async getDownloadUrl(_: unknown, __: unknown, id: string) {
+          return id === attachmentId ? 'https://minio.local/download' : null;
+        },
+        async deleteAttachment(context: unknown, id: unknown, attachmentIdArg: unknown) {
+          deleteCalls.push({ context, id, attachmentId: attachmentIdArg });
+          return attachmentIdArg === attachmentId;
+        },
+      },
+    } as never);
+
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${nodeId}/attachments`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { fileName: 'смета.pdf', contentType: 'application/pdf', sizeBytes: 2048 },
+      });
+      const list = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-graph-nodes/${nodeId}/attachments`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const downloadUrl = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-graph-nodes/${nodeId}/attachments/${attachmentId}/download-url`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const missingDownloadUrl = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-graph-nodes/${nodeId}/attachments/66666666-6666-4666-8666-666666666666/download-url`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const deleted = await app.inject({
+        method: 'DELETE',
+        url: `/v1/budget-graph-nodes/${nodeId}/attachments/${attachmentId}`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+
+      expect(create.statusCode).toBe(201);
+      expect(create.json()).toEqual({ attachment, uploadUrl: 'https://minio.local/upload' });
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        id: nodeId,
+        input: { fileName: 'смета.pdf', contentType: 'application/pdf', sizeBytes: '2048' },
+      }]);
+      expect(list.statusCode).toBe(200);
+      expect(list.json()).toEqual([attachment]);
+      expect(downloadUrl.statusCode).toBe(200);
+      expect(downloadUrl.json()).toEqual({ url: 'https://minio.local/download' });
+      expect(missingDownloadUrl.statusCode).toBe(404);
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toEqual({ deleted: true });
+      expect(deleteCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a' }),
+        id: nodeId,
+        attachmentId,
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('maps a not-found graph node to 400 when creating an attachment, and rejects an unauthenticated request', async () => {
+    const missingNodeId = '55555555-5555-4555-8555-555555555555';
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      nodeAttachmentRepository: {
+        async createUploadTarget(_: unknown, id: string) {
+          throw new NodeAttachmentNodeNotFoundError(id);
+        },
+      },
+    } as never);
+
+    try {
+      const invalid = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${missingNodeId}/attachments`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { fileName: '', contentType: 'application/pdf', sizeBytes: 1 },
+      });
+      const notFoundNode = await app.inject({
+        method: 'POST',
+        url: `/v1/budget-graph-nodes/${missingNodeId}/attachments`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { fileName: 'x.pdf', contentType: 'application/pdf', sizeBytes: 1 },
+      });
+      const unauthenticated = await app.inject({
+        method: 'GET',
+        url: `/v1/budget-graph-nodes/${missingNodeId}/attachments`,
+      });
+
+      expect(invalid.statusCode).toBe(400);
+      expect(notFoundNode.statusCode).toBe(400);
+      expect(unauthenticated.statusCode).toBe(401);
     } finally {
       await app.close();
     }

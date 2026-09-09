@@ -12,6 +12,7 @@ import {
   BudgetGraphWorkshopNotFoundError,
   PostgresBudgetGraphRepository,
 } from './postgres-budget-graph-repository.js';
+import { PostgresWorkshopTaskRepository } from './postgres-workshop-task-repository.js';
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIntegration = databaseUrl ? describe : describe.skip;
@@ -344,6 +345,76 @@ describeIntegration('PostgresBudgetGraphRepository', () => {
         ...LAYOUT,
       }),
     ).rejects.toBeInstanceOf(BudgetGraphNodeNotFoundError);
+  });
+
+  it('exposes null approvedTotal for non-workshop nodes, and 0.00 for a workshop node with no approved tasks', async () => {
+    const fixture = await createFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetGraphRepository(client);
+    const root = await repository.createNode(fixture.context, fixture.budgetVersionId, {
+      nodeType: 'production',
+      title: 'Ревизор',
+      plannedAmount: '0.00',
+      ...LAYOUT,
+    });
+    const workshop = await repository.createNode(fixture.context, fixture.budgetVersionId, {
+      parentId: root.id,
+      workshopId: fixture.workshopId,
+      nodeType: 'workshop',
+      title: 'Цех сборки',
+      plannedAmount: '0.00',
+      ...LAYOUT,
+    });
+
+    const nodes = await repository.listNodes(fixture.context, fixture.budgetVersionId);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+
+    expect(byId.get(root.id)?.approvedTotal).toBeNull();
+    expect(byId.get(workshop.id)?.approvedTotal).toBe('0.00');
+  });
+
+  it('sums only approved graph-node tasks into approvedTotal, ignoring pending and rejected ones', async () => {
+    const fixture = await createFixture(client, 'Tenant A');
+    const repository = new PostgresBudgetGraphRepository(client);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const root = await repository.createNode(fixture.context, fixture.budgetVersionId, {
+      nodeType: 'production',
+      title: 'Ревизор',
+      plannedAmount: '0.00',
+      ...LAYOUT,
+    });
+    const workshop = await repository.createNode(fixture.context, fixture.budgetVersionId, {
+      parentId: root.id,
+      workshopId: fixture.workshopId,
+      nodeType: 'workshop',
+      title: 'Цех сборки',
+      plannedAmount: '0.00',
+      ...LAYOUT,
+    });
+
+    const approvedTask = await taskRepository.createTaskForGraphNode(fixture.context, workshop.id, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.50',
+      assigneeMembershipIds: [fixture.context.membershipId],
+    });
+    await taskRepository.recordLeadDecision(fixture.context, approvedTask.id, 'approved');
+
+    const rejectedTask = await taskRepository.createTaskForGraphNode(fixture.context, workshop.id, {
+      description: 'Смета на краску',
+      plannedAmount: '999.00',
+      assigneeMembershipIds: [fixture.context.membershipId],
+    });
+    await taskRepository.recordLeadDecision(fixture.context, rejectedTask.id, 'rejected');
+
+    await taskRepository.createTaskForGraphNode(fixture.context, workshop.id, {
+      description: 'Смета на гвозди (ещё не решено)',
+      plannedAmount: '250.00',
+      assigneeMembershipIds: [fixture.context.membershipId],
+    });
+
+    const nodes = await repository.listNodes(fixture.context, fixture.budgetVersionId);
+    const found = nodes.find((node) => node.id === workshop.id);
+
+    expect(found?.approvedTotal).toBe('1500.50');
   });
 });
 

@@ -6,11 +6,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { PostgresBudgetRepository } from './postgres-budget-repository.js';
 import {
   PostgresWorkshopTaskRepository,
+  WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
   WorkshopTaskClosedError,
+  WorkshopTaskGraphNodeNotFoundError,
+  WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
 } from './postgres-workshop-task-repository.js';
 
@@ -340,6 +343,126 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
       taskRepository.rescheduleTaskDeadline(tenantA.context, task.id, '2026-12-24', 'Причина'),
     ).resolves.toBeNull();
   });
+
+  it('creates a task on a workshop graph node with two assignees, both pending', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const assigneeB = await createMembershipFixture(client, tenant.tenantId, 'Петров');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+
+    const task = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      assigneeMembershipIds: [tenant.context.membershipId, assigneeB],
+    });
+
+    expect(task).toMatchObject({
+      graphNodeId,
+      budgetItemId: null,
+      workshopId: tenant.workshopId,
+      productionId: tenant.productionId,
+      status: 'new',
+      plannedAmount: '1500.00',
+    });
+    expect(task.assignees).toHaveLength(2);
+    expect(task.assignees.every((assignee) => assignee.status === 'pending')).toBe(true);
+    await expect(
+      client.query("SELECT count(*)::int AS count FROM audit_events WHERE action = 'workshop_task.created' AND subject_id = $1", [task.id]),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('rejects creating a graph-node task on a non-workshop node or an assignee outside the tenant', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const outsider = await createTenantFixture(client, 'Tenant B');
+    const { rootId, graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+
+    await expect(
+      taskRepository.createTaskForGraphNode(tenant.context, rootId, {
+        description: 'X',
+        plannedAmount: '1.00',
+        assigneeMembershipIds: [tenant.context.membershipId],
+      }),
+    ).rejects.toBeInstanceOf(WorkshopTaskGraphNodeNotWorkshopError);
+
+    await expect(
+      taskRepository.createTaskForGraphNode(tenant.context, randomUUID(), {
+        description: 'X',
+        plannedAmount: '1.00',
+        assigneeMembershipIds: [tenant.context.membershipId],
+      }),
+    ).rejects.toBeInstanceOf(WorkshopTaskGraphNodeNotFoundError);
+
+    await expect(
+      taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+        description: 'X',
+        plannedAmount: '1.00',
+        assigneeMembershipIds: [outsider.context.membershipId],
+      }),
+    ).rejects.toBeInstanceOf(WorkshopTaskAssigneeNotFoundError);
+  });
+
+  it('marks one assignee done independently of the others, and rejects marking after a lead decision', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const assigneeB = await createMembershipFixture(client, tenant.tenantId, 'Петров');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      assigneeMembershipIds: [tenant.context.membershipId, assigneeB],
+    });
+
+    const marked = await taskRepository.markAssigneeDone(tenant.context, task.id, tenant.context.membershipId);
+    expect(marked).toMatchObject({ membershipId: tenant.context.membershipId, status: 'done' });
+    expect(marked!.completedAt).not.toBeNull();
+
+    const stillPending = await taskRepository.listGraphNodeTasks(tenant.context, graphNodeId);
+    const statuses = stillPending[0]!.assignees.map((assignee) => assignee.status).sort();
+    expect(statuses).toEqual(['done', 'pending']);
+
+    await taskRepository.recordLeadDecision(tenant.context, task.id, 'approved');
+    await expect(
+      taskRepository.markAssigneeDone(tenant.context, task.id, assigneeB),
+    ).rejects.toBeInstanceOf(WorkshopTaskAlreadyDecidedError);
+  });
+
+  it('records a lead approval and adds the amount to the node approvedTotal, and rejects a second decision', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+    });
+
+    const approved = await taskRepository.recordLeadDecision(tenant.context, task.id, 'approved');
+    expect(approved).toMatchObject({ status: 'approved' });
+    expect(approved!.completedAt).not.toBeNull();
+
+    await expect(
+      taskRepository.recordLeadDecision(tenant.context, task.id, 'rejected'),
+    ).rejects.toBeInstanceOf(WorkshopTaskInvalidTransitionError);
+    await expect(
+      client.query("SELECT count(*)::int AS count FROM audit_events WHERE action = 'workshop_task.lead_decision' AND subject_id = $1", [task.id]),
+    ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('records a lead rejection without touching completedAt', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+    });
+
+    const rejected = await taskRepository.recordLeadDecision(tenant.context, task.id, 'rejected');
+    expect(rejected).toMatchObject({ status: 'rejected' });
+    expect(rejected!.completedAt).toBeNull();
+  });
 });
 
 async function createReadyTask(
@@ -358,6 +481,57 @@ async function createReadyTask(
   });
   await budgetRepository.approveBudget(tenant.context, budget.id);
   return taskRepository.createTaskFromBudgetItem(tenant.context, { budgetItemId: budget.sections[0]!.items[0]!.id });
+}
+
+async function createWorkshopNodeFixture(
+  client: Client,
+  tenant: Awaited<ReturnType<typeof createTenantFixture>>,
+): Promise<{ rootId: string; graphNodeId: string }> {
+  const budgetId = randomUUID();
+  const budgetVersionId = randomUUID();
+  const rootId = randomUUID();
+  const graphNodeId = randomUUID();
+
+  await client.query(
+    "INSERT INTO budgets (id, tenant_id, production_id, status, updated_at) VALUES ($1, $2, $3, 'PRELIMINARY', NOW())",
+    [budgetId, tenant.tenantId, tenant.productionId],
+  );
+  await client.query(
+    'INSERT INTO budget_versions (id, tenant_id, budget_id, revision, created_by_membership_id) VALUES ($1, $2, $3, 1, $4)',
+    [budgetVersionId, tenant.tenantId, budgetId, tenant.context.membershipId],
+  );
+  await client.query(
+    `INSERT INTO budget_graph_nodes (
+       id, tenant_id, budget_version_id, parent_id, workshop_id, node_type, title,
+       planned_amount, position_x, position_y, width, height, updated_at
+     ) VALUES ($1, $2, $3, NULL, NULL, 'production', 'Ревизор', 0, 0, 0, 160, 80, NOW())`,
+    [rootId, tenant.tenantId, budgetVersionId],
+  );
+  await client.query(
+    `INSERT INTO budget_graph_nodes (
+       id, tenant_id, budget_version_id, parent_id, workshop_id, node_type, title,
+       planned_amount, position_x, position_y, width, height, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, 'workshop', 'Цех сборки', 0, 0, 0, 160, 80, NOW())`,
+    [graphNodeId, tenant.tenantId, budgetVersionId, rootId, tenant.workshopId],
+  );
+
+  return { rootId, graphNodeId };
+}
+
+async function createMembershipFixture(client: Client, tenantId: string, name: string): Promise<string> {
+  const userId = randomUUID();
+  const membershipId = randomUUID();
+
+  await client.query(
+    'INSERT INTO users (id, email, "displayName", updated_at) VALUES ($1, $2, $3, NOW())',
+    [userId, `${userId}@example.test`, name],
+  );
+  await client.query(
+    'INSERT INTO memberships (id, tenant_id, user_id, updated_at) VALUES ($1, $2, $3, NOW())',
+    [membershipId, tenantId, userId],
+  );
+
+  return membershipId;
 }
 
 async function createTenantFixture(client: Client, name: string) {
