@@ -5,7 +5,14 @@ import { AppShell } from '../../app-shell.js';
 import { LayersIcon, TicketIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
 import { formatPremiereDate, healthLabel } from '../../lib/format.js';
-import { MOCK_BUDGETS, MOCK_PRODUCTIONS, type Budget, type Production } from '../../lib/mock-data.js';
+import {
+  MOCK_BUDGETS,
+  MOCK_PRODUCTIONS,
+  MOCK_WORKSHOP_TASKS,
+  type Budget,
+  type Production,
+  type WorkshopTask,
+} from '../../lib/mock-data.js';
 import { getSessionToken } from '../../lib/session.js';
 import { BudgetView } from './budget-view.js';
 
@@ -25,6 +32,7 @@ export default async function ProductionDetailPage({ params }: { params: Promise
   const budget = budgetResult === 'not-found' || budgetResult === 'forbidden' || budgetResult === 'unavailable'
     ? null
     : budgetResult;
+  const workshopTasks = budget ? await loadWorkshopTasks(id, token) : [];
 
   return (
     <AppShell>
@@ -97,7 +105,7 @@ export default async function ProductionDetailPage({ params }: { params: Promise
               </p>
             )}
             {budget ? (
-              <BudgetView budget={budget} />
+              <BudgetView budget={budget} workshopTasks={workshopTasks} />
             ) : (
               <p className="empty-state">Смета для этой постановки ещё не создана.</p>
             )}
@@ -144,4 +152,15 @@ async function loadBudget(id: string, token: string): Promise<LoadResult<Budget>
   if (!response.ok) return 'unavailable';
 
   return (await response.json()) as Budget;
+}
+
+async function loadWorkshopTasks(id: string, token: string): Promise<WorkshopTask[]> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1') {
+    return MOCK_WORKSHOP_TASKS[id] ?? [];
+  }
+
+  const response = await apiFetch(`/v1/productions/${id}/workshop-tasks`, { token });
+  if (!response.ok) return [];
+
+  return (await response.json()) as WorkshopTask[];
 }

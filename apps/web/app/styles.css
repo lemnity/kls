@@ -563,6 +563,10 @@ input:focus-visible,
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   padding: 24px;
+  /* Grid/flex items default to min-width: auto, which lets wide content
+     (e.g. the Gantt board's 100 day-cells) grow the card — and the whole
+     page — past the viewport instead of scrolling inside its own box. */
+  min-width: 0;
 }
 
 /* Lower dashboard section: a wider data-table panel beside a narrower
@@ -1449,6 +1453,109 @@ input:focus-visible,
   color: var(--color-text-soft);
   border-top: 1px solid var(--color-border);
   padding-top: 14px;
+}
+
+/* -------------------------------------------------------------------- */
+/* Budget Gantt board — 100 day-cells per department, coloured by that   */
+/* day's workshop-task status.                                          */
+/* -------------------------------------------------------------------- */
+
+.budget-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.budget-tab {
+  padding: 8px 4px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font: 700 0.85rem/1 var(--font-sans);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.budget-tab:hover {
+  color: var(--color-text);
+}
+
+.budget-tab--active {
+  color: var(--color-accent-dark);
+  border-bottom-color: var(--color-accent);
+}
+
+.budget-gantt {
+  min-width: 0;
+  padding: 14px 0;
+}
+
+.budget-gantt h3 {
+  font: 800 0.95rem/1 var(--font-display);
+  margin-bottom: 4px;
+}
+
+.budget-gantt__hint {
+  font-size: 0.78rem;
+  margin-bottom: 12px;
+}
+
+.budget-gantt__scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.budget-gantt__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+}
+
+.budget-gantt__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-gantt__row-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 160px;
+  background: var(--color-surface);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-right: 8px;
+}
+
+.budget-gantt__cells {
+  display: flex;
+  gap: 2px;
+}
+
+.budget-gantt__cell {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: var(--color-neutral-soft);
+}
+
+.budget-gantt__cell--done {
+  background: var(--color-success);
+}
+
+.budget-gantt__cell--overdue {
+  background: var(--color-danger);
+}
+
+.budget-gantt__cell--in-progress {
+  background: var(--color-warning);
 }
 
 .budget-total strong {

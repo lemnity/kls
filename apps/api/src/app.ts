@@ -233,6 +233,7 @@ export interface WorkshopTaskRepository {
     input: CreateTaskFromBudgetItemInput,
   ): Promise<StoredWorkshopTask>;
   listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]>;
+  listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTask[]>;
   assignTask(context: TenantContext, taskId: string, assigneeMembershipId: string): Promise<StoredWorkshopTask | null>;
   acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
   completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
@@ -686,6 +687,20 @@ class HealthController {
     if (!UUID_PATTERN.test(workshopId)) return [];
 
     return this.workshopTaskRepository.listTasksByWorkshop(context, workshopId);
+  }
+
+  @Get('v1/productions/:productionId/workshop-tasks')
+  public async listProductionWorkshopTasks(
+    @Req() request: FastifyRequest,
+    @Param('productionId') productionId: string,
+  ): Promise<StoredWorkshopTask[]> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(productionId)) return [];
+
+    return this.workshopTaskRepository.listTasksByProduction(context, productionId);
   }
 
   @Patch('v1/workshop-tasks/:taskId/assign')

@@ -214,6 +214,19 @@ export class PostgresWorkshopTaskRepository {
     return result.rows;
   }
 
+  /** For the "Смета" Gantt board — every task across every workshop of one production. */
+  public async listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTask[]> {
+    const result = await this.client.query<StoredWorkshopTask>(
+      `SELECT ${TASK_COLUMNS}
+       FROM workshop_tasks
+       WHERE tenant_id = $1 AND production_id = $2
+       ORDER BY created_at ASC`,
+      [context.tenantId, productionId],
+    );
+
+    return result.rows;
+  }
+
   /**
    * Инкремент 8 drill-down: a task created directly against a `workshop`-type
    * budget graph node, not tied to a legacy `budget_item`. Multiple assignees

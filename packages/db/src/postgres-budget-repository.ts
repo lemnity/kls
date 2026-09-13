@@ -51,6 +51,7 @@ export interface StoredBudget {
   revision: number;
   sections: StoredBudgetSection[];
   total: string;
+  createdAt: string;
 }
 
 export class BudgetProductionNotFoundError extends Error {
@@ -87,6 +88,7 @@ interface BudgetRow {
   status: BudgetStatus;
   versionId: string;
   revision: number;
+  createdAt: string;
   sectionId: string | null;
   workshopId: string | null;
   sectionTitle: string | null;
@@ -315,6 +317,7 @@ export class PostgresBudgetRepository {
     const result = await this.client.query<BudgetRow>(
       `SELECT
          b.id AS "budgetId", b.production_id AS "productionId", b.status,
+         to_char(b.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "createdAt",
          v.id AS "versionId", v.revision,
          sec.id AS "sectionId", sec.workshop_id AS "workshopId", sec.title AS "sectionTitle",
          it.id AS "itemId", it.description, it.quantity, it.unit,
@@ -373,6 +376,7 @@ export class PostgresBudgetRepository {
       revision: first.revision,
       sections: [...sections.values()],
       total: sumMoney(allItemTotals),
+      createdAt: first.createdAt,
     };
   }
 }

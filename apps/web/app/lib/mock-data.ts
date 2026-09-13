@@ -33,6 +33,16 @@ export interface Budget {
   revision: number;
   sections: BudgetSection[];
   total: string;
+  createdAt: string;
+}
+
+export interface WorkshopTask {
+  id: string;
+  workshopId: string;
+  status: string;
+  description: string;
+  deadlineAt: string | null;
+  completedAt: string | null;
 }
 
 export const MOCK_PRODUCTIONS: Production[] = [
@@ -85,6 +95,7 @@ export const MOCK_BUDGETS: Record<string, Budget> = {
       },
     ],
     total: '7335.00',
+    createdAt: '2026-01-01T00:00:00Z',
   },
   'prod-2': {
     id: 'budget-prod-2',
@@ -104,5 +115,8 @@ export const MOCK_BUDGETS: Record<string, Budget> = {
       },
     ],
     total: '2000.00',
+    createdAt: '2026-01-01T00:00:00Z',
   },
 };
+
+export const MOCK_WORKSHOP_TASKS: Record<string, WorkshopTask[]> = {};
