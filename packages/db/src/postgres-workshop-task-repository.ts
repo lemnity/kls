@@ -17,6 +17,7 @@ export interface StoredWorkshopTask {
   status: string;
   description: string;
   plannedAmount: string | null;
+  startAt: string | null;
   deadlineAt: string | null;
   completedAt: string | null;
 }
@@ -39,6 +40,8 @@ export interface CreateTaskForWorkshopInput {
   productionId: string;
   workshopId: string;
   description: string;
+  /** Defaults to `deadlineAt` when omitted — a single-day task spans just that one day. */
+  startAt?: string;
   deadlineAt: string;
   assigneeMembershipId?: string;
 }
@@ -139,11 +142,12 @@ export class WorkshopTaskProductionNotFoundError extends Error {
 }
 
 const TASK_RAW_COLUMNS = `id, budget_item_id, graph_node_id, production_id, workshop_id,
-           assignee_membership_id, status, description, planned_amount, deadline_at, completed_at`;
+           assignee_membership_id, status, description, planned_amount, start_at, deadline_at, completed_at`;
 const TASK_COLUMNS = `id, budget_item_id AS "budgetItemId", graph_node_id AS "graphNodeId",
            production_id AS "productionId", workshop_id AS "workshopId",
            assignee_membership_id AS "assigneeMembershipId",
            status, description, planned_amount AS "plannedAmount",
+           to_char(start_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "startAt",
            to_char(deadline_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "deadlineAt",
            to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "completedAt"`;
 
@@ -286,13 +290,13 @@ export class PostgresWorkshopTaskRepository {
       `WITH created AS (
          INSERT INTO workshop_tasks (
            id, tenant_id, budget_item_id, graph_node_id, production_id, workshop_id,
-           assignee_membership_id, status, description, planned_amount, deadline_at, updated_at
+           assignee_membership_id, status, description, planned_amount, start_at, deadline_at, updated_at
          )
-         VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, NULL, $8::timestamptz, NOW())
+         VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, NULL, $8::timestamptz, $9::timestamptz, NOW())
          RETURNING ${TASK_RAW_COLUMNS}
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
-         SELECT $9, $2, $10, 'workshop_task.created', 'workshop_task', id,
+         SELECT $10, $2, $11, 'workshop_task.created', 'workshop_task', id,
            jsonb_build_object('workshopId', $4, 'description', $7)
          FROM created
        )
@@ -305,6 +309,7 @@ export class PostgresWorkshopTaskRepository {
         input.assigneeMembershipId ?? null,
         DEFAULT_TASK_STATUS,
         input.description,
+        input.startAt ?? input.deadlineAt,
         input.deadlineAt,
         randomUUID(),
         context.membershipId,

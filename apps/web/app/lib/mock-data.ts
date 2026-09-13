@@ -39,8 +39,10 @@ export interface Budget {
 export interface WorkshopTask {
   id: string;
   workshopId: string;
+  assigneeMembershipId: string | null;
   status: string;
   description: string;
+  startAt: string | null;
   deadlineAt: string | null;
   completedAt: string | null;
 }

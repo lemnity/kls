@@ -1976,20 +1976,24 @@ function readCreateGraphNodeTaskInput(body: unknown): CreateTaskForGraphNodeInpu
 
 function readCreateWorkshopTaskInput(
   body: unknown,
-): { workshopId: string; description: string; deadlineAt: string; assigneeMembershipId?: string } | null {
+): { workshopId: string; description: string; startAt?: string; deadlineAt: string; assigneeMembershipId?: string } | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const input = body as Record<string, unknown>;
   const workshopId = typeof input.workshopId === 'string' && UUID_PATTERN.test(input.workshopId) ? input.workshopId : null;
   const description = normalizeString(input.description, 1000);
   const deadlineAt = readNullableIsoDate(input.deadlineAt);
+  const startAt = readNullableIsoDate(input.startAt);
   const assigneeMembershipId = readOptionalUuid(input.assigneeMembershipId);
   if (!workshopId || !description || !deadlineAt || deadlineAt === 'invalid' || assigneeMembershipId === null) {
     return null;
   }
+  if (startAt === 'invalid') return null;
+  if (startAt && startAt > deadlineAt) return null;
 
   return {
     workshopId,
     description,
+    ...(startAt ? { startAt } : {}),
     deadlineAt,
     ...(assigneeMembershipId ? { assigneeMembershipId } : {}),
   };
