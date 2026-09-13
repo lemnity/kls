@@ -1456,47 +1456,85 @@ input:focus-visible,
 }
 
 /* -------------------------------------------------------------------- */
-/* Budget Gantt board — 100 day-cells per department, coloured by that   */
+/* Budget calendar — 100 day-cells per department, coloured by that      */
 /* day's workshop-task status.                                          */
 /* -------------------------------------------------------------------- */
 
+/* A segmented-control look. Plain <button>s carry browser chrome (border,
+   background, focus ring) that a bare "border-bottom" override doesn't
+   remove — reset it explicitly instead of layering styles on top of it. */
 .budget-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--color-border);
+  display: inline-flex;
+  gap: 2px;
+  padding: 4px;
+  width: fit-content;
+  background: var(--color-neutral-soft);
+  border-radius: var(--radius-pill);
 }
 
 .budget-tab {
-  padding: 8px 4px;
-  margin-bottom: -1px;
-  border-bottom: 2px solid transparent;
-  font: 700 0.85rem/1 var(--font-sans);
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 8px 18px;
+  border-radius: var(--radius-pill);
+  font: 700 0.82rem/1 var(--font-sans);
   color: var(--color-text-muted);
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .budget-tab:hover {
   color: var(--color-text);
 }
 
+.budget-tab:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .budget-tab--active {
+  background: var(--color-surface);
   color: var(--color-accent-dark);
-  border-bottom-color: var(--color-accent);
+  box-shadow: var(--shadow-soft);
 }
 
 .budget-gantt {
   min-width: 0;
-  padding: 14px 0;
+  padding: 18px 0 4px;
+}
+
+.budget-gantt__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
 
 .budget-gantt h3 {
-  font: 800 0.95rem/1 var(--font-display);
+  font: 800 1rem/1 var(--font-display);
   margin-bottom: 4px;
 }
 
 .budget-gantt__hint {
   font-size: 0.78rem;
-  margin-bottom: 12px;
+  max-width: 46ch;
+}
+
+.budget-gantt__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.budget-gantt__add select {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font: 700 0.8rem/1 var(--font-sans);
+  background: var(--color-surface);
 }
 
 .budget-gantt__scroll {
@@ -1507,7 +1545,7 @@ input:focus-visible,
 .budget-gantt__grid {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   width: max-content;
 }
 
@@ -1535,15 +1573,36 @@ input:focus-visible,
 
 .budget-gantt__cells {
   display: flex;
-  gap: 2px;
+  gap: 3px;
 }
 
 .budget-gantt__cell {
-  width: 11px;
-  height: 11px;
+  appearance: none;
+  border: 1px solid transparent;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--color-neutral-soft);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.budget-gantt__cell:hover {
+  transform: scale(1.2);
+  box-shadow: var(--shadow-soft);
+  z-index: 1;
+  position: relative;
+}
+
+.budget-gantt__cell:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.budget-gantt__cell--selected {
+  border-color: var(--color-ink);
 }
 
 .budget-gantt__cell--done {
@@ -1556,6 +1615,36 @@ input:focus-visible,
 
 .budget-gantt__cell--in-progress {
   background: var(--color-warning);
+}
+
+.budget-gantt__detail {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: var(--color-neutral-soft);
+  border-radius: var(--radius-md);
+}
+
+.budget-gantt__detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.budget-gantt__detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+}
+
+.budget-gantt__detail-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
 }
 
 .budget-total strong {

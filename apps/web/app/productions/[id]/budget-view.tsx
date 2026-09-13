@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { SortIcon } from '../../icons.js';
 import { pluralize } from '../../lib/format.js';
@@ -12,8 +12,16 @@ const BUDGET_STATUS_LABEL: Record<string, string> = {
   APPROVED: 'Утверждённая',
 };
 
-const GANTT_DAY_COUNT = 100;
+const CALENDAR_DAY_COUNT = 100;
 const DONE_STATUSES = new Set(['completed', 'closed']);
+
+const CLASSIC_TASK_STATUS_LABEL: Record<string, string> = {
+  new: 'Новая',
+  assigned: 'Назначена',
+  accepted: 'Принята',
+  completed: 'Выполнена',
+  closed: 'Закрыта',
+};
 
 type DayCellStatus = 'done' | 'overdue' | 'in-progress' | null;
 
@@ -37,7 +45,7 @@ function dayCellStatus(tasksForDay: WorkshopTask[], day: string, today: string):
   return day < today ? 'overdue' : 'in-progress';
 }
 
-function BudgetGanttBoard({
+function BudgetCalendarBoard({
   workshops,
   tasks,
   startDate,
@@ -48,7 +56,7 @@ function BudgetGanttBoard({
 }) {
   const today = toDateOnly(new Date().toISOString());
   const days = useMemo(
-    () => Array.from({ length: GANTT_DAY_COUNT }, (_, index) => addDaysUTC(startDate, index)),
+    () => Array.from({ length: CALENDAR_DAY_COUNT }, (_, index) => addDaysUTC(startDate, index)),
     [startDate],
   );
 
@@ -66,16 +74,87 @@ function BudgetGanttBoard({
     return map;
   }, [tasks]);
 
+  const [allWorkshops, setAllWorkshops] = useState<{ id: string; name: string; isActive: boolean }[]>([]);
+  const [extraWorkshops, setExtraWorkshops] = useState<[string, string][]>([]);
+  const [addingDepartment, setAddingDepartment] = useState(false);
+  const [pickedWorkshopId, setPickedWorkshopId] = useState('');
+  const [selected, setSelected] = useState<{ workshopId: string; title: string; day: string } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/proxy/organization/workshops')
+      .then((response) => (response.ok ? (response.json() as Promise<{ id: string; name: string; isActive: boolean }[]>) : []))
+      .then(setAllWorkshops)
+      .catch(() => setAllWorkshops([]));
+  }, []);
+
+  const rows = useMemo(() => [...workshops, ...extraWorkshops], [workshops, extraWorkshops]);
+  const availableToAdd = useMemo(
+    () => allWorkshops.filter((workshop) => workshop.isActive && !rows.some(([id]) => id === workshop.id)),
+    [allWorkshops, rows],
+  );
+
+  function handleAddDepartment(): void {
+    const workshop = allWorkshops.find((item) => item.id === pickedWorkshopId);
+    if (!workshop) return;
+    setExtraWorkshops((current) => [...current, [workshop.id, workshop.name]]);
+    setPickedWorkshopId('');
+    setAddingDepartment(false);
+  }
+
+  const selectedTasks = selected ? tasksByWorkshopAndDay.get(selected.workshopId)?.get(selected.day) ?? [] : [];
+
   return (
-    <section className="budget-gantt" aria-label="Доска Ганта по дням">
-      <h3>Доска Ганта</h3>
-      <p className="muted budget-gantt__hint">
-        {GANTT_DAY_COUNT} дней от {formatDayLabel(startDate)} — зелёный: все задачи дня выполнены, жёлтый: в работе,
-        красный: просрочены.
-      </p>
+    <section className="budget-gantt" aria-label="Календарь задач по дням">
+      <div className="budget-gantt__header">
+        <div>
+          <h3>Календарь</h3>
+          <p className="muted budget-gantt__hint">
+            {CALENDAR_DAY_COUNT} дней от {formatDayLabel(startDate)} — зелёный: все задачи дня выполнены, жёлтый: в
+            работе, красный: просрочены. Клик по ячейке показывает задачи дня.
+          </p>
+        </div>
+        <div className="budget-gantt__add">
+          {addingDepartment ? (
+            <>
+              <select value={pickedWorkshopId} onChange={(event) => setPickedWorkshopId(event.target.value)}>
+                <option value="">Выберите цех…</option>
+                {availableToAdd.map((workshop) => (
+                  <option key={workshop.id} value={workshop.id}>
+                    {workshop.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn-pill btn-pill--accent btn-pill--small"
+                disabled={!pickedWorkshopId}
+                onClick={handleAddDepartment}
+              >
+                Добавить
+              </button>
+              <button
+                type="button"
+                className="btn-pill btn-pill--ghost btn-pill--small"
+                onClick={() => setAddingDepartment(false)}
+              >
+                Отмена
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn-pill btn-pill--ghost btn-pill--small"
+              onClick={() => setAddingDepartment(true)}
+            >
+              + Добавить отдел
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="budget-gantt__scroll">
-        <div className="budget-gantt__grid" style={{ gridTemplateRows: `repeat(${workshops.length}, auto)` }}>
-          {workshops.map(([workshopId, title]) => {
+        <div className="budget-gantt__grid">
+          {rows.map(([workshopId, title]) => {
             const byDay = tasksByWorkshopAndDay.get(workshopId);
             return (
               <div key={workshopId} className="budget-gantt__row">
@@ -83,11 +162,14 @@ function BudgetGanttBoard({
                 <div className="budget-gantt__cells">
                   {days.map((day) => {
                     const status = dayCellStatus(byDay?.get(day) ?? [], day, today);
+                    const isSelected = selected?.workshopId === workshopId && selected.day === day;
                     return (
-                      <span
+                      <button
                         key={day}
-                        className={`budget-gantt__cell${status ? ` budget-gantt__cell--${status}` : ''}`}
+                        type="button"
+                        className={`budget-gantt__cell${status ? ` budget-gantt__cell--${status}` : ''}${isSelected ? ' budget-gantt__cell--selected' : ''}`}
                         title={`${title}, ${formatDayLabel(day)}`}
+                        onClick={() => setSelected({ workshopId, title, day })}
                       />
                     );
                   })}
@@ -97,11 +179,41 @@ function BudgetGanttBoard({
           })}
         </div>
       </div>
+
+      {selected && (
+        <div className="budget-gantt__detail">
+          <div className="budget-gantt__detail-header">
+            <strong>
+              {selected.title}, {formatDayLabel(selected.day)}
+            </strong>
+            <button
+              type="button"
+              className="icon-btn icon-btn--ghost"
+              aria-label="Закрыть"
+              onClick={() => setSelected(null)}
+            >
+              ✕
+            </button>
+          </div>
+          {selectedTasks.length === 0 ? (
+            <p className="muted">Задач на этот день нет.</p>
+          ) : (
+            <ul className="budget-gantt__detail-list">
+              {selectedTasks.map((task) => (
+                <li key={task.id}>
+                  <span>{task.description}</span>
+                  <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </section>
   );
 }
 
-type ViewTab = 'items' | 'gantt';
+type ViewTab = 'items' | 'calendar';
 
 export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshopTasks: WorkshopTask[] }) {
   const [workshopFilter, setWorkshopFilter] = useState('');
@@ -152,19 +264,19 @@ export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshop
         <button
           type="button"
           role="tab"
-          aria-selected={activeTab === 'gantt'}
-          className={`budget-tab${activeTab === 'gantt' ? ' budget-tab--active' : ''}`}
-          onClick={() => setActiveTab('gantt')}
+          aria-selected={activeTab === 'calendar'}
+          className={`budget-tab${activeTab === 'calendar' ? ' budget-tab--active' : ''}`}
+          onClick={() => setActiveTab('calendar')}
         >
-          Доска Ганта
+          Календарь
         </button>
       </div>
 
-      {activeTab === 'gantt' ? (
+      {activeTab === 'calendar' ? (
         workshopOptions.length > 0 ? (
-          <BudgetGanttBoard workshops={workshopOptions} tasks={workshopTasks} startDate={toDateOnly(budget.createdAt)} />
+          <BudgetCalendarBoard workshops={workshopOptions} tasks={workshopTasks} startDate={toDateOnly(budget.createdAt)} />
         ) : (
-          <p className="empty-state">Нет отделов для отображения на доске Ганта.</p>
+          <p className="empty-state">Нет отделов для отображения в календаре.</p>
         )
       ) : (
         <>
