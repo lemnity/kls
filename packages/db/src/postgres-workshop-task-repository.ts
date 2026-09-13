@@ -35,6 +35,14 @@ export interface CreateTaskForGraphNodeInput {
   deadlineAt?: string;
 }
 
+export interface CreateTaskForWorkshopInput {
+  productionId: string;
+  workshopId: string;
+  description: string;
+  deadlineAt: string;
+  assigneeMembershipId?: string;
+}
+
 export type TaskAssigneeStatus = 'pending' | 'done';
 export type TaskLeadDecision = 'approved' | 'rejected';
 
@@ -113,6 +121,20 @@ export class WorkshopTaskAlreadyDecidedError extends Error {
   public constructor(public readonly taskId: string, public readonly status: string) {
     super(`Task ${taskId} already has a lead decision ('${status}')`);
     this.name = 'WorkshopTaskAlreadyDecidedError';
+  }
+}
+
+export class WorkshopTaskWorkshopNotFoundError extends Error {
+  public constructor(public readonly workshopId: string) {
+    super(`Workshop ${workshopId} not found in tenant`);
+    this.name = 'WorkshopTaskWorkshopNotFoundError';
+  }
+}
+
+export class WorkshopTaskProductionNotFoundError extends Error {
+  public constructor(public readonly productionId: string) {
+    super(`Production ${productionId} not found in tenant`);
+    this.name = 'WorkshopTaskProductionNotFoundError';
   }
 }
 
@@ -225,6 +247,71 @@ export class PostgresWorkshopTaskRepository {
     );
 
     return result.rows;
+  }
+
+  /**
+   * A bare task for the "Смета" calendar — not tied to a `budget_item`
+   * (Инкремент 3's approved-item flow) or a graph node (Инкремент 8's
+   * visual constructor). `productionId`/`workshopId` are taken directly
+   * since the calendar already knows both from the page it's on.
+   */
+  public async createTaskForWorkshop(
+    context: TenantContext,
+    input: CreateTaskForWorkshopInput,
+  ): Promise<StoredWorkshopTask> {
+    const production = await this.client.query(
+      'SELECT 1 FROM productions WHERE id = $1 AND tenant_id = $2',
+      [input.productionId, context.tenantId],
+    );
+    if ((production.rowCount ?? 0) === 0) throw new WorkshopTaskProductionNotFoundError(input.productionId);
+
+    const workshop = await this.client.query(
+      'SELECT 1 FROM workshops WHERE id = $1 AND tenant_id = $2',
+      [input.workshopId, context.tenantId],
+    );
+    if ((workshop.rowCount ?? 0) === 0) throw new WorkshopTaskWorkshopNotFoundError(input.workshopId);
+
+    if (input.assigneeMembershipId) {
+      const assignee = await this.client.query(
+        'SELECT 1 FROM memberships WHERE id = $1 AND tenant_id = $2',
+        [input.assigneeMembershipId, context.tenantId],
+      );
+      if ((assignee.rowCount ?? 0) === 0) {
+        throw new WorkshopTaskAssigneeNotFoundError(input.assigneeMembershipId);
+      }
+    }
+
+    const taskId = randomUUID();
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH created AS (
+         INSERT INTO workshop_tasks (
+           id, tenant_id, budget_item_id, graph_node_id, production_id, workshop_id,
+           assignee_membership_id, status, description, planned_amount, deadline_at, updated_at
+         )
+         VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, NULL, $8::timestamptz, NOW())
+         RETURNING ${TASK_RAW_COLUMNS}
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $9, $2, $10, 'workshop_task.created', 'workshop_task', id,
+           jsonb_build_object('workshopId', $4, 'description', $7)
+         FROM created
+       )
+       SELECT ${TASK_COLUMNS} FROM created`,
+      [
+        taskId,
+        context.tenantId,
+        input.productionId,
+        input.workshopId,
+        input.assigneeMembershipId ?? null,
+        DEFAULT_TASK_STATUS,
+        input.description,
+        input.deadlineAt,
+        randomUUID(),
+        context.membershipId,
+      ],
+    );
+
+    return result.rows[0]!;
   }
 
   /**

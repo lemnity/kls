@@ -45,14 +45,23 @@ function dayCellStatus(tasksForDay: WorkshopTask[], day: string, today: string):
   return day < today ? 'overdue' : 'in-progress';
 }
 
+interface CreateWorkshopTaskInput {
+  workshopId: string;
+  description: string;
+  deadlineAt: string;
+  assigneeMembershipId?: string;
+}
+
 function BudgetCalendarBoard({
   workshops,
   tasks,
   startDate,
+  onCreateTask,
 }: {
   workshops: [string, string][];
   tasks: WorkshopTask[];
   startDate: string;
+  onCreateTask: (input: CreateWorkshopTaskInput) => Promise<boolean>;
 }) {
   const today = toDateOnly(new Date().toISOString());
   const days = useMemo(
@@ -79,12 +88,21 @@ function BudgetCalendarBoard({
   const [addingDepartment, setAddingDepartment] = useState(false);
   const [pickedWorkshopId, setPickedWorkshopId] = useState('');
   const [selected, setSelected] = useState<{ workshopId: string; title: string; day: string } | null>(null);
+  const [allMemberships, setAllMemberships] = useState<{ id: string; userEmail: string; status: string }[]>([]);
+  const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [newTaskAssigneeId, setNewTaskAssigneeId] = useState('');
+  const [creatingTask, setCreatingTask] = useState(false);
+  const [createTaskError, setCreateTaskError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/proxy/organization/workshops')
       .then((response) => (response.ok ? (response.json() as Promise<{ id: string; name: string; isActive: boolean }[]>) : []))
       .then(setAllWorkshops)
       .catch(() => setAllWorkshops([]));
+    fetch('/api/proxy/organization/memberships')
+      .then((response) => (response.ok ? (response.json() as Promise<{ id: string; userEmail: string; status: string }[]>) : []))
+      .then((list) => setAllMemberships(list.filter((membership) => membership.status === 'ACTIVE')))
+      .catch(() => setAllMemberships([]));
   }, []);
 
   const rows = useMemo(() => [...workshops, ...extraWorkshops], [workshops, extraWorkshops]);
@@ -102,6 +120,37 @@ function BudgetCalendarBoard({
   }
 
   const selectedTasks = selected ? tasksByWorkshopAndDay.get(selected.workshopId)?.get(selected.day) ?? [] : [];
+
+  function openCell(workshopId: string, title: string, day: string): void {
+    setSelected({ workshopId, title, day });
+    setNewTaskDescription('');
+    setNewTaskAssigneeId('');
+    setCreateTaskError(null);
+  }
+
+  async function handleCreateTaskSubmit(event: React.FormEvent): Promise<void> {
+    event.preventDefault();
+    if (!selected || !newTaskDescription || creatingTask) return;
+
+    setCreatingTask(true);
+    setCreateTaskError(null);
+    try {
+      const ok = await onCreateTask({
+        workshopId: selected.workshopId,
+        description: newTaskDescription,
+        deadlineAt: selected.day,
+        ...(newTaskAssigneeId ? { assigneeMembershipId: newTaskAssigneeId } : {}),
+      });
+      if (!ok) {
+        setCreateTaskError('Не удалось поставить задачу.');
+        return;
+      }
+      setNewTaskDescription('');
+      setNewTaskAssigneeId('');
+    } finally {
+      setCreatingTask(false);
+    }
+  }
 
   return (
     <section className="budget-gantt" aria-label="Календарь задач по дням">
@@ -167,7 +216,7 @@ function BudgetCalendarBoard({
                         type="button"
                         className={`budget-gantt__cell${status ? ` budget-gantt__cell--${status}` : ''}${isSelected ? ' budget-gantt__cell--selected' : ''}`}
                         title={`${title}, ${formatDayLabel(day)}`}
-                        onClick={() => setSelected({ workshopId, title, day })}
+                        onClick={() => openCell(workshopId, title, day)}
                       />
                     );
                   })}
@@ -179,36 +228,95 @@ function BudgetCalendarBoard({
       </div>
 
       {selected && (
-        <>
-          <div className="budget-graph__backdrop" onClick={() => setSelected(null)} />
-          <div className="budget-graph__side-panel" role="dialog" aria-label="Задачи дня">
-            <div className="budget-graph__side-panel-header">
-              <strong>
-                {selected.title}, {formatDayLabel(selected.day)}
-              </strong>
+        <div className="task-modal-backdrop" onClick={() => setSelected(null)}>
+          <div
+            className="task-modal"
+            role="dialog"
+            aria-label="Задачи дня"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="task-modal__header">
+              <span className="task-modal__title">
+                {selected.title} <span className="muted">· {formatDayLabel(selected.day)}</span>
+              </span>
               <button
                 type="button"
                 className="icon-btn icon-btn--ghost"
-                aria-label="Закрыть панель"
+                aria-label="Закрыть"
                 onClick={() => setSelected(null)}
               >
                 ✕
               </button>
             </div>
-            {selectedTasks.length === 0 ? (
-              <p className="muted">Задач на этот день нет.</p>
-            ) : (
-              <ul className="budget-gantt__detail-list">
-                {selectedTasks.map((task) => (
-                  <li key={task.id}>
-                    <span>{task.description}</span>
-                    <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+
+            <form className="task-modal__form" onSubmit={handleCreateTaskSubmit}>
+              <div className="task-modal__body">
+                <section>
+                  <h4 className="task-modal__section-title">Задачи дня</h4>
+                  {selectedTasks.length === 0 ? (
+                    <p className="muted">Задач на этот день нет.</p>
+                  ) : (
+                    <ul className="budget-gantt__detail-list">
+                      {selectedTasks.map((task) => (
+                        <li key={task.id}>
+                          <span>{task.description}</span>
+                          <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section className="task-modal__create">
+                  <h4 className="task-modal__section-title">Новая задача</h4>
+                  <label className="task-modal__field">
+                    <span>Название задачи</span>
+                    <input
+                      type="text"
+                      placeholder="Введите название задачи"
+                      value={newTaskDescription}
+                      onChange={(event) => setNewTaskDescription(event.target.value)}
+                      required
+                    />
+                  </label>
+                  <label className="task-modal__field">
+                    <span>Ответственный</span>
+                    <select value={newTaskAssigneeId} onChange={(event) => setNewTaskAssigneeId(event.target.value)}>
+                      <option value="">Без ответственного</option>
+                      {allMemberships.map((membership) => (
+                        <option key={membership.id} value={membership.id}>
+                          {membership.userEmail}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="task-modal__field">
+                    <span>Крайний срок</span>
+                    <input type="text" value={formatDayLabel(selected.day)} disabled />
+                  </label>
+                  {createTaskError && (
+                    <p role="alert" className="task-row__error">
+                      {createTaskError}
+                    </p>
+                  )}
+                </section>
+              </div>
+
+              <div className="task-modal__footer">
+                <button
+                  type="submit"
+                  className="btn-pill btn-pill--accent"
+                  disabled={!newTaskDescription || creatingTask}
+                >
+                  {creatingTask ? 'Ставим…' : 'Поставить задачу'}
+                </button>
+                <button type="button" className="btn-pill btn-pill--ghost" onClick={() => setSelected(null)}>
+                  Отмена
+                </button>
+              </div>
+            </form>
           </div>
-        </>
+        </div>
       )}
     </section>
   );
@@ -219,6 +327,22 @@ type ViewTab = 'items' | 'calendar';
 export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshopTasks: WorkshopTask[] }) {
   const [workshopFilter, setWorkshopFilter] = useState('');
   const [activeTab, setActiveTab] = useState<ViewTab>('items');
+  const [tasks, setTasks] = useState<WorkshopTask[]>(workshopTasks);
+
+  async function handleCreateTask(input: CreateWorkshopTaskInput): Promise<boolean> {
+    const response = await fetch(`/api/proxy/productions/${budget.productionId}/workshop-tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) return false;
+
+    const refreshed = await fetch(`/api/proxy/productions/${budget.productionId}/workshop-tasks`);
+    if (refreshed.ok) {
+      setTasks((await refreshed.json()) as WorkshopTask[]);
+    }
+    return true;
+  }
 
   const workshopOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -277,7 +401,12 @@ export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshop
 
       {activeTab === 'calendar' ? (
         workshopOptions.length > 0 ? (
-          <BudgetCalendarBoard workshops={workshopOptions} tasks={workshopTasks} startDate={toDateOnly(budget.createdAt)} />
+          <BudgetCalendarBoard
+            workshops={workshopOptions}
+            tasks={tasks}
+            startDate={toDateOnly(budget.createdAt)}
+            onCreateTask={handleCreateTask}
+          />
         ) : (
           <p className="empty-state">Нет отделов для отображения в календаре.</p>
         )

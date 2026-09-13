@@ -73,7 +73,10 @@ import {
   WorkshopTaskGraphNodeNotFoundError,
   WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
+  WorkshopTaskProductionNotFoundError,
+  WorkshopTaskWorkshopNotFoundError,
   type CreateTaskForGraphNodeInput,
+  type CreateTaskForWorkshopInput,
   type CreateTaskFromBudgetItemInput,
   type StoredTaskAssignee,
   type StoredWorkshopTask,
@@ -234,6 +237,7 @@ export interface WorkshopTaskRepository {
   ): Promise<StoredWorkshopTask>;
   listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]>;
   listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTask[]>;
+  createTaskForWorkshop(context: TenantContext, input: CreateTaskForWorkshopInput): Promise<StoredWorkshopTask>;
   assignTask(context: TenantContext, taskId: string, assigneeMembershipId: string): Promise<StoredWorkshopTask | null>;
   acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
   completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
@@ -701,6 +705,35 @@ class HealthController {
     if (!UUID_PATTERN.test(productionId)) return [];
 
     return this.workshopTaskRepository.listTasksByProduction(context, productionId);
+  }
+
+  @Post('v1/productions/:productionId/workshop-tasks')
+  public async createProductionWorkshopTask(
+    @Req() request: FastifyRequest,
+    @Param('productionId') productionId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTask> {
+    const input = readCreateWorkshopTaskInput(body);
+    if (!input) throw new BadRequestException('Invalid task payload');
+
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(productionId)) throw new NotFoundException();
+
+    try {
+      return await this.workshopTaskRepository.createTaskForWorkshop(context, { productionId, ...input });
+    } catch (error) {
+      if (error instanceof WorkshopTaskProductionNotFoundError) throw new NotFoundException();
+      if (error instanceof WorkshopTaskWorkshopNotFoundError) {
+        throw new BadRequestException('Workshop not found in tenant');
+      }
+      if (error instanceof WorkshopTaskAssigneeNotFoundError) {
+        throw new BadRequestException('Assignee not found in tenant');
+      }
+      throw error;
+    }
   }
 
   @Patch('v1/workshop-tasks/:taskId/assign')
@@ -1938,6 +1971,27 @@ function readCreateGraphNodeTaskInput(body: unknown): CreateTaskForGraphNodeInpu
     plannedAmount,
     assigneeMembershipIds,
     ...(deadlineAt ? { deadlineAt } : {}),
+  };
+}
+
+function readCreateWorkshopTaskInput(
+  body: unknown,
+): { workshopId: string; description: string; deadlineAt: string; assigneeMembershipId?: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const workshopId = typeof input.workshopId === 'string' && UUID_PATTERN.test(input.workshopId) ? input.workshopId : null;
+  const description = normalizeString(input.description, 1000);
+  const deadlineAt = readNullableIsoDate(input.deadlineAt);
+  const assigneeMembershipId = readOptionalUuid(input.assigneeMembershipId);
+  if (!workshopId || !description || !deadlineAt || deadlineAt === 'invalid' || assigneeMembershipId === null) {
+    return null;
+  }
+
+  return {
+    workshopId,
+    description,
+    deadlineAt,
+    ...(assigneeMembershipId ? { assigneeMembershipId } : {}),
   };
 }
 
