@@ -106,13 +106,11 @@ function BudgetCalendarBoard({
   return (
     <section className="budget-gantt" aria-label="Календарь задач по дням">
       <div className="budget-gantt__header">
-        <div>
-          <h3>Календарь</h3>
-          <p className="muted budget-gantt__hint">
-            {CALENDAR_DAY_COUNT} дней от {formatDayLabel(startDate)} — зелёный: все задачи дня выполнены, жёлтый: в
-            работе, красный: просрочены. Клик по ячейке показывает задачи дня.
-          </p>
-        </div>
+        <h3>Календарь</h3>
+        <p className="muted budget-gantt__hint">
+          {CALENDAR_DAY_COUNT} дней от {formatDayLabel(startDate)} — зелёный: все задачи дня выполнены, жёлтый: в
+          работе, красный: просрочены. Клик по ячейке показывает задачи дня.
+        </p>
         <div className="budget-gantt__add">
           {addingDepartment ? (
             <>
@@ -235,41 +233,43 @@ export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshop
 
   return (
     <div className="budget-view">
-      <div className="budget-total">
-        <div className="budget-total__meta">
-          <span
-            className="status-pill"
-            data-testid="budget-status"
-            data-budget-status={budget.status}
+      <div className="budget-toolbar">
+        <div className="budget-tabs" role="tablist" aria-label="Вид сметы">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'items'}
+            className={`budget-tab${activeTab === 'items' ? ' budget-tab--active' : ''}`}
+            onClick={() => setActiveTab('items')}
           >
-            {BUDGET_STATUS_LABEL[budget.status] ?? budget.status}
-          </span>
-          <span className="muted">Ревизия {budget.revision}</span>
+            Позиции
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'calendar'}
+            className={`budget-tab${activeTab === 'calendar' ? ' budget-tab--active' : ''}`}
+            onClick={() => setActiveTab('calendar')}
+          >
+            Календарь
+          </button>
         </div>
-        <div>
-          <span className="muted">Итого по смете</span> <strong>{budget.total} ₽</strong>
-        </div>
-      </div>
 
-      <div className="budget-tabs" role="tablist" aria-label="Вид сметы">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'items'}
-          className={`budget-tab${activeTab === 'items' ? ' budget-tab--active' : ''}`}
-          onClick={() => setActiveTab('items')}
-        >
-          Позиции
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'calendar'}
-          className={`budget-tab${activeTab === 'calendar' ? ' budget-tab--active' : ''}`}
-          onClick={() => setActiveTab('calendar')}
-        >
-          Календарь
-        </button>
+        <div className="budget-total">
+          <div className="budget-total__meta">
+            <span
+              className="status-pill"
+              data-testid="budget-status"
+              data-budget-status={budget.status}
+            >
+              {BUDGET_STATUS_LABEL[budget.status] ?? budget.status}
+            </span>
+            <span className="muted">Ревизия {budget.revision}</span>
+          </div>
+          <div>
+            <span className="muted">Итого по смете</span> <strong>{budget.total} ₽</strong>
+          </div>
+        </div>
       </div>
 
       {activeTab === 'calendar' ? (

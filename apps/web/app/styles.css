@@ -1419,14 +1419,25 @@ input:focus-visible,
   gap: 20px;
 }
 
-.budget-total {
+/* Left = every interactive control (tabs, contextual action buttons);
+   right = read-only status/total blocks. Kept as one row so the two
+   groupings stay visually paired instead of each doing its own
+   left/right split on a separate line. */
+.budget-toolbar {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px 16px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--color-border);
+}
+
+.budget-total {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .budget-total__meta {
@@ -1505,11 +1516,6 @@ input:focus-visible,
 }
 
 .budget-gantt__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
   margin-bottom: 14px;
 }
 
@@ -1520,7 +1526,8 @@ input:focus-visible,
 
 .budget-gantt__hint {
   font-size: 0.78rem;
-  max-width: 46ch;
+  max-width: 60ch;
+  margin-bottom: 12px;
 }
 
 .budget-gantt__add {
