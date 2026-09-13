@@ -4,7 +4,13 @@ import { redirect } from 'next/navigation';
 import { AppShell } from '../../app-shell.js';
 import { LayersIcon, TicketIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
-import { formatPremiereDate, healthLabel } from '../../lib/format.js';
+import {
+  formatDateOnly,
+  formatPremiereDate,
+  healthLabel,
+  healthValueLabel,
+  productionStatusTone,
+} from '../../lib/format.js';
 import {
   MOCK_BUDGETS,
   MOCK_PRODUCTIONS,
@@ -63,7 +69,9 @@ export default async function ProductionDetailPage({ params }: { params: Promise
               <div>
                 <dt>Статус</dt>
                 <dd>
-                  <span className="status-pill">{production.status}</span>
+                  <span className="status-pill" data-tone={productionStatusTone(production.status)}>
+                    {production.status}
+                  </span>
                 </dd>
               </div>
               <div>
@@ -74,12 +82,18 @@ export default async function ProductionDetailPage({ params }: { params: Promise
                     data-health={production.healthStatus}
                     title={healthLabel(production.healthStatus)}
                   />{' '}
-                  <span className="muted">{healthLabel(production.healthStatus)}</span>
+                  <span className="muted">{healthValueLabel(production.healthStatus)}</span>
+                  {production.healthReason && (
+                    <>
+                      <br />
+                      <span className="meta-list__note muted">{production.healthReason}</span>
+                    </>
+                  )}
                 </dd>
               </div>
               <div>
                 <dt>Премьера</dt>
-                <dd>{formatPremiereDate(production.premiereDate)}</dd>
+                <dd>{formatDateOnly(production.premiereDate)}</dd>
               </div>
             </dl>
           </article>

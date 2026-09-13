@@ -1414,6 +1414,12 @@ input:focus-visible,
   font-size: 0.95rem;
 }
 
+.meta-list__note {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 0.82rem;
+}
+
 .budget-view {
   display: grid;
   gap: 20px;

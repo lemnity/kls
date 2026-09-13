@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { AppShell } from './app-shell.js';
 import { ArrowUpRightIcon, CalendarIcon, DocumentIcon, LayersIcon, MaskIcon, SortIcon } from './icons.js';
 import { apiFetch } from './lib/api.js';
-import { formatPremiereDate, healthLabel, pluralize } from './lib/format.js';
+import { formatPremiereDate, healthLabel, humanizeStatus, pluralize, productionStatusTone } from './lib/format.js';
 import { MOCK_PRODUCTIONS, type Production } from './lib/mock-data.js';
 import { getSessionToken } from './lib/session.js';
 
@@ -74,7 +74,7 @@ export default async function HomePage() {
               {distribution.slice(0, 3).map((seg, index) => (
                 <li key={seg.status}>
                   <span className="dot" style={{ background: paletteColor(index) }} />
-                  <span className="legend-name">{humanize(seg.status)}</span>
+                  <span className="legend-name">{humanizeStatus(seg.status)}</span>
                 </li>
               ))}
             </ul>
@@ -159,7 +159,7 @@ export default async function HomePage() {
               {distribution.slice(0, 3).map((seg, index) => (
                 <li key={seg.status}>
                   <span className="dot" style={{ background: paletteColor(index) }} />
-                  <span className="legend-name">{humanize(seg.status)}</span>
+                  <span className="legend-name">{humanizeStatus(seg.status)}</span>
                 </li>
               ))}
             </ul>
@@ -234,7 +234,7 @@ export default async function HomePage() {
                           <span
                             className="status-pill"
                             data-testid="production-status"
-                            data-tone={statusTone(production.status)}
+                            data-tone={productionStatusTone(production.status)}
                           >
                             {production.status}
                           </span>
@@ -416,29 +416,6 @@ function getPremiereHighlight(productions: Production[]): PremiereHighlight | nu
   return { label: 'Последняя премьера', production: past.production };
 }
 
-/**
- * Cosmetic-only display transform for chart labels/legends where space is
- * tight (e.g. "in_progress" -> "in progress"). Never used for the
- * authoritative status-pill text or any data-testid'd content — those keep
- * showing the raw status value.
- */
-function humanize(status: string): string {
-  return status.replace(/_/g, ' ');
-}
-
-/**
- * Loose keyword heuristic mapping a free-text production status to a status
- * pill "tone" (color). Falls back to the default accent tone when nothing
- * matches — this is purely presentational and never changes the underlying
- * status value shown to the user.
- */
-function statusTone(status: string): 'success' | 'warning' | 'danger' | 'neutral' | undefined {
-  const value = status.toLowerCase();
-  if (/(approved|complete|done|premiere|готов|утвержд|выпущ)/.test(value)) return 'success';
-  if (/(risk|hold|paus|отмен|cancel|reject)/.test(value)) return 'danger';
-  if (/(draft|черновик|planned|план)/.test(value)) return 'neutral';
-  return undefined;
-}
 
 /* -------------------------------------------------------------------- */
 /* Stat card micro-visualizations                                       */
@@ -461,7 +438,7 @@ function BubbleViz({ distribution }: { distribution: StatusSegment[] }) {
             key={segment.status}
             className="bubble"
             style={{ width: size, height: size, background: paletteColor(index) }}
-            title={`${humanize(segment.status)} — ${segment.count}`}
+            title={`${humanizeStatus(segment.status)} — ${segment.count}`}
           >
             {segment.count}
           </span>
@@ -545,13 +522,13 @@ function BarChartViz({ distribution, average }: { distribution: StatusSegment[];
         const heightPercent = Math.max(10, Math.round((segment.count / maxCount) * 100));
         const active = index === 0;
         return (
-          <span key={segment.status} className="bar-viz__col" title={`${humanize(segment.status)} — ${segment.count}`}>
+          <span key={segment.status} className="bar-viz__col" title={`${humanizeStatus(segment.status)} — ${segment.count}`}>
             {active && <span className="bar-viz__callout">{segment.count}</span>}
             <span
               className={`bar-viz__bar${active ? ' bar-viz__bar--active' : ''}`}
               style={{ height: `${heightPercent}%` }}
             />
-            <span className="bar-viz__label">{humanize(segment.status)}</span>
+            <span className="bar-viz__label">{humanizeStatus(segment.status)}</span>
           </span>
         );
       })}
