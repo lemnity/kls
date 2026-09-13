@@ -2,25 +2,23 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../app-shell.js';
-import { LayersIcon, TicketIcon } from '../../icons.js';
+import { TicketIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
-import {
-  formatDateOnly,
-  formatPremiereDate,
-  healthLabel,
-  healthValueLabel,
-  productionStatusTone,
-} from '../../lib/format.js';
+import { formatPremiereDate } from '../../lib/format.js';
 import {
   MOCK_BUDGETS,
+  MOCK_MEMBERSHIPS,
   MOCK_PRODUCTIONS,
   MOCK_WORKSHOP_TASKS,
   type Budget,
+  type Membership,
   type Production,
   type WorkshopTask,
 } from '../../lib/mock-data.js';
 import { getSessionToken } from '../../lib/session.js';
+import { BudgetEmptyState } from './budget-empty-state.js';
 import { BudgetView } from './budget-view.js';
+import { ProductionInfoPanel } from './production-info-panel.js';
 
 type LoadResult<T> = T | 'not-found' | 'forbidden' | 'unavailable';
 
@@ -38,7 +36,10 @@ export default async function ProductionDetailPage({ params }: { params: Promise
   const budget = budgetResult === 'not-found' || budgetResult === 'forbidden' || budgetResult === 'unavailable'
     ? null
     : budgetResult;
-  const workshopTasks = budget ? await loadWorkshopTasks(id, token) : [];
+  const [workshopTasks, memberships] = await Promise.all([
+    budget ? loadWorkshopTasks(id, token) : Promise.resolve<WorkshopTask[]>([]),
+    loadMemberships(token),
+  ]);
 
   return (
     <AppShell>
@@ -56,49 +57,9 @@ export default async function ProductionDetailPage({ params }: { params: Promise
         </section>
 
         <div className="detail-grid">
-          <article className="card">
-            <div className="table-card__header">
-              <div className="donut-card__header-text">
-                <span className="stat-card__icon">
-                  <LayersIcon />
-                </span>
-                <h2>Сведения</h2>
-              </div>
-            </div>
-            <dl className="meta-list">
-              <div>
-                <dt>Статус</dt>
-                <dd>
-                  <span className="status-pill" data-tone={productionStatusTone(production.status)}>
-                    {production.status}
-                  </span>
-                </dd>
-              </div>
-              <div>
-                <dt>Здоровье</dt>
-                <dd>
-                  <i
-                    className="health-dot"
-                    data-health={production.healthStatus}
-                    title={healthLabel(production.healthStatus)}
-                  />{' '}
-                  <span className="muted">{healthValueLabel(production.healthStatus)}</span>
-                  {production.healthReason && (
-                    <>
-                      <br />
-                      <span className="meta-list__note muted">{production.healthReason}</span>
-                    </>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Премьера</dt>
-                <dd>{formatDateOnly(production.premiereDate)}</dd>
-              </div>
-            </dl>
-          </article>
+          <ProductionInfoPanel production={production} memberships={memberships} />
 
-          <article className="card">
+          <article className="card budget-card">
             <div className="table-card__header">
               <div className="donut-card__header-text">
                 <span className="stat-card__icon">
@@ -118,11 +79,7 @@ export default async function ProductionDetailPage({ params }: { params: Promise
                 считаются независимо.
               </p>
             )}
-            {budget ? (
-              <BudgetView budget={budget} workshopTasks={workshopTasks} />
-            ) : (
-              <p className="empty-state">Смета для этой постановки ещё не создана.</p>
-            )}
+            {budget ? <BudgetView budget={budget} workshopTasks={workshopTasks} /> : <BudgetEmptyState productionId={id} />}
           </article>
         </div>
       </main>
@@ -177,4 +134,15 @@ async function loadWorkshopTasks(id: string, token: string): Promise<WorkshopTas
   if (!response.ok) return [];
 
   return (await response.json()) as WorkshopTask[];
+}
+
+async function loadMemberships(token: string): Promise<Membership[]> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1') {
+    return MOCK_MEMBERSHIPS;
+  }
+
+  const response = await apiFetch('/v1/organization/memberships', { token });
+  if (!response.ok) return [];
+
+  return (await response.json()) as Membership[];
 }

@@ -45,6 +45,12 @@ export interface WorkshopTask {
   completedAt: string | null;
 }
 
+export interface Membership {
+  id: string;
+  userEmail: string;
+  status: string;
+}
+
 export const MOCK_PRODUCTIONS: Production[] = [
   {
     id: 'prod-1',
@@ -120,3 +126,5 @@ export const MOCK_BUDGETS: Record<string, Budget> = {
 };
 
 export const MOCK_WORKSHOP_TASKS: Record<string, WorkshopTask[]> = {};
+
+export const MOCK_MEMBERSHIPS: Membership[] = [];
