@@ -18,7 +18,11 @@ import {
   BudgetProductionNotFoundError,
   BudgetSectionWorkshopNotFoundError,
 } from '@kulisa/db/budget-repository';
-import { WorkshopManagerNotFoundError, WorkshopNameAlreadyExistsError } from '@kulisa/db/workshop-repository';
+import {
+  WorkshopManagerNotFoundError,
+  WorkshopNameAlreadyExistsError,
+  WorkshopParentNotFoundError,
+} from '@kulisa/db/workshop-repository';
 import {
   BudgetGraphCycleError,
   BudgetGraphNotAlternativeError,
@@ -750,6 +754,86 @@ describe('API health endpoints', () => {
         url: '/v1/organization/workshops',
         headers: { authorization: 'Bearer token-a' },
         payload: { name: 'Пошивочный цех', managerMembershipId: '11111111-1111-4111-8111-111111111111' },
+      });
+
+      expect(response.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('creates a sub-department workshop with a parentWorkshopId', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const parentWorkshopId = '11111111-1111-4111-8111-111111111111';
+    const createCalls: unknown[] = [];
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop(context: unknown, input: unknown) {
+          createCalls.push({ context, input });
+          return { id: 'workshop-b', name: 'Мужской пошив', isActive: true, parentWorkshopId };
+        },
+        async listWorkshops() {
+          return [];
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/organization/workshops',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'Мужской пошив', parentWorkshopId },
+      });
+
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({ parentWorkshopId });
+      expect(createCalls).toEqual([{
+        context: expect.objectContaining({ tenantId: 'tenant-a', membershipId: 'membership-a' }),
+        input: { name: 'Мужской пошив', parentWorkshopId },
+      }]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects creating a workshop with a parent workshop outside the tenant', async () => {
+    const authenticator: SessionAuthenticator = {
+      async authenticate() {
+        return {
+          userId: 'user-a',
+          membership: { id: 'membership-a', tenantId: 'tenant-a', userId: 'user-a', isActive: true },
+        };
+      },
+    };
+    const app = await createApiApp({
+      sessionAuthenticator: authenticator,
+      permissionResolver: { async hasPermission() { return true; } },
+      workshopRepository: {
+        async createWorkshop() {
+          throw new WorkshopParentNotFoundError('11111111-1111-4111-8111-111111111111');
+        },
+        async listWorkshops() {
+          return [];
+        },
+      },
+    } as never);
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/organization/workshops',
+        headers: { authorization: 'Bearer token-a' },
+        payload: { name: 'Мужской пошив', parentWorkshopId: '11111111-1111-4111-8111-111111111111' },
       });
 
       expect(response.statusCode).toBe(400);

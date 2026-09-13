@@ -89,6 +89,7 @@ interface CreateWorkshopTaskInput {
 }
 
 type MembershipOption = { id: string; userEmail: string; status: string };
+type WorkshopOption = { id: string; name: string; isActive: boolean; parentWorkshopId: string | null };
 
 /**
  * A single task's lifecycle as a vertical stepper — visual style requested
@@ -268,11 +269,12 @@ function BudgetCalendarBoard({
     return map;
   }, [tasks]);
 
-  const [allWorkshops, setAllWorkshops] = useState<{ id: string; name: string; isActive: boolean }[]>([]);
+  const [allWorkshops, setAllWorkshops] = useState<WorkshopOption[]>([]);
   const [extraWorkshops, setExtraWorkshops] = useState<[string, string][]>([]);
   const [addingDepartment, setAddingDepartment] = useState(false);
   const [pickedWorkshopId, setPickedWorkshopId] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<{ workshopId: string; title: string; day: string } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [allMemberships, setAllMemberships] = useState<MembershipOption[]>([]);
@@ -285,7 +287,7 @@ function BudgetCalendarBoard({
 
   useEffect(() => {
     fetch('/api/proxy/organization/workshops')
-      .then((response) => (response.ok ? (response.json() as Promise<{ id: string; name: string; isActive: boolean }[]>) : []))
+      .then((response) => (response.ok ? (response.json() as Promise<WorkshopOption[]>) : []))
       .then(setAllWorkshops)
       .catch(() => setAllWorkshops([]));
     fetch('/api/proxy/organization/memberships')
@@ -299,10 +301,52 @@ function BudgetCalendarBoard({
     () => allWorkshops.filter((workshop) => workshop.isActive && !rows.some(([id]) => id === workshop.id)),
     [allWorkshops, rows],
   );
-  const filteredRows = useMemo(
+
+  /** Sub-departments — a department (цех) can itself have child departments
+   * (`parentWorkshopId`, real hierarchy in the DB, not just a calendar-only
+   * grouping). Rows explicitly included (budget sections + "+ Добавить
+   * отдел") act as tree roots; every active child/grandchild/… comes along
+   * automatically, indented, with its own expand/collapse. */
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, WorkshopOption[]>();
+    for (const workshop of allWorkshops) {
+      if (!workshop.isActive || !workshop.parentWorkshopId) continue;
+      const list = map.get(workshop.parentWorkshopId) ?? [];
+      list.push(workshop);
+      map.set(workshop.parentWorkshopId, list);
+    }
+    return map;
+  }, [allWorkshops]);
+
+  const filteredRoots = useMemo(
     () => rows.filter(([, title]) => title.toLowerCase().includes(departmentFilter.trim().toLowerCase())),
     [rows, departmentFilter],
   );
+
+  const visibleRows = useMemo(() => {
+    const result: { workshopId: string; title: string; depth: number; hasChildren: boolean }[] = [];
+    const visited = new Set<string>();
+    function visit(id: string, title: string, depth: number): void {
+      if (visited.has(id)) return;
+      visited.add(id);
+      const children = childrenByParent.get(id) ?? [];
+      result.push({ workshopId: id, title, depth, hasChildren: children.length > 0 });
+      if (children.length > 0 && !collapsedIds.has(id)) {
+        for (const child of children) visit(child.id, child.name, depth + 1);
+      }
+    }
+    for (const [id, title] of filteredRoots) visit(id, title, 0);
+    return result;
+  }, [filteredRoots, childrenByParent, collapsedIds]);
+
+  function toggleCollapse(workshopId: string): void {
+    setCollapsedIds((current) => {
+      const next = new Set(current);
+      if (next.has(workshopId)) next.delete(workshopId);
+      else next.add(workshopId);
+      return next;
+    });
+  }
 
   function handleAddDepartment(): void {
     const workshop = allWorkshops.find((item) => item.id === pickedWorkshopId);
@@ -429,14 +473,31 @@ function BudgetCalendarBoard({
             </div>
           </div>
 
-          {filteredRows.length === 0 ? (
+          {visibleRows.length === 0 ? (
             <p className="empty-state">Ничего не найдено — измените поиск.</p>
           ) : (
-            filteredRows.map(([workshopId, title]) => {
+            visibleRows.map(({ workshopId, title, depth, hasChildren }) => {
               const byDay = tasksByWorkshopAndDay.get(workshopId);
               return (
                 <div key={workshopId} className="budget-gantt__row">
-                  <span className="budget-gantt__row-label">{title}</span>
+                  <span
+                    className="budget-gantt__row-label"
+                    style={depth > 0 ? { paddingLeft: depth * 18 } : undefined}
+                  >
+                    {hasChildren ? (
+                      <button
+                        type="button"
+                        className="budget-gantt__row-toggle"
+                        aria-label={collapsedIds.has(workshopId) ? 'Развернуть под-отделы' : 'Свернуть под-отделы'}
+                        onClick={() => toggleCollapse(workshopId)}
+                      >
+                        {collapsedIds.has(workshopId) ? '+' : '−'}
+                      </button>
+                    ) : (
+                      depth > 0 && <span className="budget-gantt__row-toggle budget-gantt__row-toggle--leaf" aria-hidden="true" />
+                    )}
+                    {title}
+                  </span>
                   <div className="budget-gantt__cells">
                     {days.map((day) => {
                       const status = dayCellStatus(byDay?.get(day) ?? [], day, today);

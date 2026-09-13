@@ -130,6 +130,7 @@ model Workshop {
   id                  String       @id @default(uuid()) @db.Uuid
   tenantId            String       @map("tenant_id") @db.Uuid
   orgUnitId           String?      @map("org_unit_id") @db.Uuid
+  parentWorkshopId    String?      @map("parent_workshop_id") @db.Uuid
   managerMembershipId String?      @map("manager_membership_id") @db.Uuid
   name                String       @db.VarChar(200)
   isActive            Boolean      @default(true) @map("is_active")
@@ -137,6 +138,8 @@ model Workshop {
   updatedAt           DateTime     @updatedAt @map("updated_at")
   tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   orgUnit             OrgUnit?     @relation(fields: [tenantId, orgUnitId], references: [tenantId, id], onDelete: Restrict)
+  parentWorkshop      Workshop?    @relation("WorkshopParent", fields: [tenantId, parentWorkshopId], references: [tenantId, id], onDelete: Restrict)
+  childWorkshops      Workshop[]   @relation("WorkshopParent")
   manager             Membership?  @relation("WorkshopManager", fields: [tenantId, managerMembershipId], references: [tenantId, id], onDelete: Restrict)
   budgetSections      BudgetSection[]
   workshopTasks       WorkshopTask[]
@@ -145,6 +148,7 @@ model Workshop {
   @@unique([tenantId, name])
   @@unique([tenantId, id])
   @@index([tenantId, isActive])
+  @@index([tenantId, parentWorkshopId])
   @@map("workshops")
 }
 

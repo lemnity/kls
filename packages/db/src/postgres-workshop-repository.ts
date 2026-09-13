@@ -10,6 +10,7 @@ export interface StoredWorkshop {
   name: string;
   isActive: boolean;
   managerMembershipId: string | null;
+  parentWorkshopId: string | null;
 }
 
 export class WorkshopNameAlreadyExistsError extends Error {
@@ -26,24 +27,35 @@ export class WorkshopManagerNotFoundError extends Error {
   }
 }
 
-const WORKSHOP_RAW_COLUMNS = `id, name, is_active, manager_membership_id`;
-const WORKSHOP_COLUMNS = `id, name, is_active AS "isActive", manager_membership_id AS "managerMembershipId"`;
+export class WorkshopParentNotFoundError extends Error {
+  public constructor(public readonly parentWorkshopId: string) {
+    super(`Parent workshop ${parentWorkshopId} not found in tenant`);
+    this.name = 'WorkshopParentNotFoundError';
+  }
+}
+
+const WORKSHOP_RAW_COLUMNS = `id, name, is_active, manager_membership_id, parent_workshop_id`;
+const WORKSHOP_COLUMNS = `id, name, is_active AS "isActive", manager_membership_id AS "managerMembershipId",
+           parent_workshop_id AS "parentWorkshopId"`;
 
 export class PostgresWorkshopRepository {
   public constructor(private readonly client: SqlClient) {}
 
   public async createWorkshop(
     context: TenantContext,
-    input: { name: string; managerMembershipId?: string },
+    input: { name: string; managerMembershipId?: string; parentWorkshopId?: string },
   ): Promise<StoredWorkshop> {
     if (input.managerMembershipId && !(await this.membershipBelongsToTenant(context, input.managerMembershipId))) {
       throw new WorkshopManagerNotFoundError(input.managerMembershipId);
     }
+    if (input.parentWorkshopId && !(await this.workshopBelongsToTenant(context, input.parentWorkshopId))) {
+      throw new WorkshopParentNotFoundError(input.parentWorkshopId);
+    }
 
     const result = await this.client.query<StoredWorkshop>(
       `WITH created AS (
-         INSERT INTO workshops (id, tenant_id, name, manager_membership_id, updated_at)
-         SELECT $1::uuid, $2::uuid, $3::varchar, $6::uuid, NOW()
+         INSERT INTO workshops (id, tenant_id, name, manager_membership_id, parent_workshop_id, updated_at)
+         SELECT $1::uuid, $2::uuid, $3::varchar, $6::uuid, $7::uuid, NOW()
          WHERE NOT EXISTS (SELECT 1 FROM workshops WHERE tenant_id = $2 AND name = $3)
          RETURNING ${WORKSHOP_RAW_COLUMNS}
        ), audited AS (
@@ -52,7 +64,15 @@ export class PostgresWorkshopRepository {
          FROM created
        )
        SELECT ${WORKSHOP_COLUMNS} FROM created`,
-      [randomUUID(), context.tenantId, input.name, randomUUID(), context.membershipId, input.managerMembershipId ?? null],
+      [
+        randomUUID(),
+        context.tenantId,
+        input.name,
+        randomUUID(),
+        context.membershipId,
+        input.managerMembershipId ?? null,
+        input.parentWorkshopId ?? null,
+      ],
     );
 
     const workshop = result.rows[0];
@@ -104,6 +124,14 @@ export class PostgresWorkshopRepository {
     const result = await this.client.query(
       'SELECT 1 FROM memberships WHERE id = $1 AND tenant_id = $2',
       [membershipId, context.tenantId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  private async workshopBelongsToTenant(context: TenantContext, workshopId: string): Promise<boolean> {
+    const result = await this.client.query(
+      'SELECT 1 FROM workshops WHERE id = $1 AND tenant_id = $2',
+      [workshopId, context.tenantId],
     );
     return (result.rowCount ?? 0) > 0;
   }

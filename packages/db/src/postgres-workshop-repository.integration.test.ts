@@ -7,6 +7,7 @@ import {
   PostgresWorkshopRepository,
   WorkshopManagerNotFoundError,
   WorkshopNameAlreadyExistsError,
+  WorkshopParentNotFoundError,
 } from './postgres-workshop-repository.js';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -158,6 +159,43 @@ describeIntegration('PostgresWorkshopRepository', () => {
     await expect(
       repository.assignWorkshopManager(tenantA, foreignWorkshop.id, null),
     ).resolves.toBeNull();
+  });
+
+  it('creates a sub-department workshop under a parent workshop in the same tenant', async () => {
+    const context = await createTenantContext(client, 'Tenant A');
+    const repository = new PostgresWorkshopRepository(client);
+    const parent = await repository.createWorkshop(context, { name: 'Пошивочный цех' });
+
+    const child = await repository.createWorkshop(context, {
+      name: 'Мужской пошив',
+      parentWorkshopId: parent.id,
+    });
+
+    expect(child.parentWorkshopId).toBe(parent.id);
+    const list = await repository.listWorkshops(context);
+    expect(list.find((workshop) => workshop.id === parent.id)?.parentWorkshopId).toBeNull();
+  });
+
+  it('rejects creating a workshop under a parent from another tenant, without creating the workshop', async () => {
+    const tenantA = await createTenantContext(client, 'Tenant A');
+    const tenantB = await createTenantContext(client, 'Tenant B');
+    const repository = new PostgresWorkshopRepository(client);
+    const foreignParent = await repository.createWorkshop(tenantB, { name: 'Пошивочный цех' });
+
+    await expect(
+      repository.createWorkshop(tenantA, { name: 'Мужской пошив', parentWorkshopId: foreignParent.id }),
+    ).rejects.toBeInstanceOf(WorkshopParentNotFoundError);
+    await expect(repository.listWorkshops(tenantA)).resolves.toEqual([]);
+  });
+
+  it('rejects a workshop naming itself as its own parent', async () => {
+    const context = await createTenantContext(client, 'Tenant A');
+    const repository = new PostgresWorkshopRepository(client);
+    const workshop = await repository.createWorkshop(context, { name: 'Пошивочный цех' });
+
+    await expect(
+      client.query('UPDATE workshops SET parent_workshop_id = $1 WHERE id = $1', [workshop.id]),
+    ).rejects.toThrow();
   });
 });
 

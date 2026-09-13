@@ -61,6 +61,7 @@ import {
 import {
   WorkshopManagerNotFoundError,
   WorkshopNameAlreadyExistsError,
+  WorkshopParentNotFoundError,
   type StoredWorkshop,
 } from '@kulisa/db/workshop-repository';
 import {
@@ -220,7 +221,7 @@ export interface BudgetRepository {
 export interface WorkshopRepository {
   createWorkshop(
     context: TenantContext,
-    input: { name: string; managerMembershipId?: string },
+    input: { name: string; managerMembershipId?: string; parentWorkshopId?: string },
   ): Promise<StoredWorkshop>;
   assignWorkshopManager(
     context: TenantContext,
@@ -632,6 +633,9 @@ class HealthController {
     }
     if (error instanceof WorkshopManagerNotFoundError) {
       return new BadRequestException('Manager membership not found in tenant');
+    }
+    if (error instanceof WorkshopParentNotFoundError) {
+      return new BadRequestException('Parent workshop not found in tenant');
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
@@ -1751,13 +1755,20 @@ function normalizeString(value: unknown, maxLength: number): string | null {
   return normalized.length > 0 && normalized.length <= maxLength ? normalized : null;
 }
 
-function readWorkshopInput(body: unknown): { name: string; managerMembershipId?: string } | null {
+function readWorkshopInput(
+  body: unknown,
+): { name: string; managerMembershipId?: string; parentWorkshopId?: string } | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const input = body as Record<string, unknown>;
   const name = normalizeString(input.name, 200);
   const managerMembershipId = readOptionalUuid(input.managerMembershipId);
-  if (!name || managerMembershipId === null) return null;
-  return { name, ...(managerMembershipId ? { managerMembershipId } : {}) };
+  const parentWorkshopId = readOptionalUuid(input.parentWorkshopId);
+  if (!name || managerMembershipId === null || parentWorkshopId === null) return null;
+  return {
+    name,
+    ...(managerMembershipId ? { managerMembershipId } : {}),
+    ...(parentWorkshopId ? { parentWorkshopId } : {}),
+  };
 }
 
 function readAssignWorkshopManagerInput(body: unknown): { managerMembershipId: string | null } | null {
