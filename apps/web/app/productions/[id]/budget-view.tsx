@@ -179,33 +179,36 @@ function BudgetCalendarBoard({
       </div>
 
       {selected && (
-        <div className="budget-gantt__detail">
-          <div className="budget-gantt__detail-header">
-            <strong>
-              {selected.title}, {formatDayLabel(selected.day)}
-            </strong>
-            <button
-              type="button"
-              className="icon-btn icon-btn--ghost"
-              aria-label="Закрыть"
-              onClick={() => setSelected(null)}
-            >
-              ✕
-            </button>
+        <>
+          <div className="budget-graph__backdrop" onClick={() => setSelected(null)} />
+          <div className="budget-graph__side-panel" role="dialog" aria-label="Задачи дня">
+            <div className="budget-graph__side-panel-header">
+              <strong>
+                {selected.title}, {formatDayLabel(selected.day)}
+              </strong>
+              <button
+                type="button"
+                className="icon-btn icon-btn--ghost"
+                aria-label="Закрыть панель"
+                onClick={() => setSelected(null)}
+              >
+                ✕
+              </button>
+            </div>
+            {selectedTasks.length === 0 ? (
+              <p className="muted">Задач на этот день нет.</p>
+            ) : (
+              <ul className="budget-gantt__detail-list">
+                {selectedTasks.map((task) => (
+                  <li key={task.id}>
+                    <span>{task.description}</span>
+                    <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          {selectedTasks.length === 0 ? (
-            <p className="muted">Задач на этот день нет.</p>
-          ) : (
-            <ul className="budget-gantt__detail-list">
-              {selectedTasks.map((task) => (
-                <li key={task.id}>
-                  <span>{task.description}</span>
-                  <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        </>
       )}
     </section>
   );

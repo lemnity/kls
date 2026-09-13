@@ -1388,7 +1388,7 @@ input:focus-visible,
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .meta-list {
@@ -1622,21 +1622,6 @@ input:focus-visible,
 
 .budget-gantt__cell--in-progress {
   background: var(--color-warning);
-}
-
-.budget-gantt__detail {
-  margin-top: 16px;
-  padding: 14px 16px;
-  background: var(--color-neutral-soft);
-  border-radius: var(--radius-md);
-}
-
-.budget-gantt__detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
 }
 
 .budget-gantt__detail-list {
