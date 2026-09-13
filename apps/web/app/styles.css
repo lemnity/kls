@@ -1493,6 +1493,12 @@ input:focus-visible,
 .budget-view {
   display: grid;
   gap: 20px;
+  /* Grid rows default to filling extra container height (align-content:
+     normal computes to stretch for grid), which — now that .budget-card
+     stretches this to the bottom of the screen — showed up as a large gap
+     between the toolbar and the tab content instead of at the bottom,
+     where leftover space reads as normal, not broken. */
+  align-content: start;
 }
 
 /* Left = every interactive control (tabs, contextual action buttons);
