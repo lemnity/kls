@@ -1,9 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
-import { SortIcon } from '../../icons.js';
+import { CheckIcon, SortIcon, TicketIcon } from '../../icons.js';
 import { pluralize } from '../../lib/format.js';
+import { useEscapeToClose } from '../../lib/use-escape-to-close.js';
 import type { Budget, WorkshopTask } from '../../lib/mock-data.js';
 
 const BUDGET_STATUS_LABEL: Record<string, string> = {
@@ -145,7 +147,7 @@ function TaskDetailStepper({
         return (
           <div key={step} className={`task-stepper__step task-stepper__step--${state}`}>
             <span className="task-stepper__rail" aria-hidden="true">
-              <span className="task-stepper__dot" />
+              <span className="task-stepper__dot">{state === 'done' && <CheckIcon />}</span>
               {index < STEP_ORDER.length - 1 && <span className="task-stepper__line" />}
             </span>
             <div className="task-stepper__content">
@@ -185,39 +187,51 @@ function TaskDetailStepper({
                       </option>
                     ))}
                   </select>
-                  <button type="submit" className="btn-pill btn-pill--accent btn-pill--small" disabled={pending || !assigneeChoice}>
-                    Назначить
+                  <button type="submit" className="task-decision task-decision--accept" disabled={pending || !assigneeChoice}>
+                    <span className="task-decision__icon">
+                      <CheckIcon />
+                    </span>
+                    <span className="task-decision__label">Назначить</span>
                   </button>
                 </form>
               )}
               {state === 'current' && step === 'assigned' && (
                 <button
                   type="button"
-                  className="btn-pill btn-pill--accent btn-pill--small"
+                  className="task-decision task-decision--accept"
                   disabled={pending}
                   onClick={() => void runAction(`workshop-tasks/${task.id}/accept`, 'POST')}
                 >
-                  Принять
+                  <span className="task-decision__icon">
+                    <CheckIcon />
+                  </span>
+                  <span className="task-decision__label">Принять</span>
                 </button>
               )}
               {state === 'current' && step === 'accepted' && (
                 <button
                   type="button"
-                  className="btn-pill btn-pill--accent btn-pill--small"
+                  className="task-decision task-decision--accept"
                   disabled={pending}
                   onClick={() => void runAction(`workshop-tasks/${task.id}/complete`, 'POST')}
                 >
-                  Выполнено
+                  <span className="task-decision__icon">
+                    <CheckIcon />
+                  </span>
+                  <span className="task-decision__label">Выполнено</span>
                 </button>
               )}
               {state === 'current' && step === 'completed' && (
                 <button
                   type="button"
-                  className="btn-pill btn-pill--accent btn-pill--small"
+                  className="task-decision task-decision--accept"
                   disabled={pending}
                   onClick={() => void runAction(`workshop-tasks/${task.id}/close`, 'POST')}
                 >
-                  Закрыть
+                  <span className="task-decision__icon">
+                    <CheckIcon />
+                  </span>
+                  <span className="task-decision__label">Закрыть</span>
                 </button>
               )}
             </div>
@@ -375,6 +389,8 @@ function BudgetCalendarBoard({
     setSelectedTaskId(null);
   }
 
+  useEscapeToClose(Boolean(selected), closeModal);
+
   async function handleCreateTaskSubmit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
     if (!selected || !newTaskDescription || !newTaskStartAt || !newTaskEndAt || rangeInvalid || creatingTask) return;
@@ -523,7 +539,7 @@ function BudgetCalendarBoard({
       {selected && (
         <div className="task-modal-backdrop" onClick={closeModal}>
           <div
-            className="task-modal"
+            className="day-tasks-panel"
             role="dialog"
             aria-label="Задачи дня"
             onClick={(event) => event.stopPropagation()}
@@ -696,44 +712,64 @@ export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshop
 
   return (
     <div className="budget-view">
-      <div className="budget-toolbar">
-        <div className="budget-tabs" role="tablist" aria-label="Вид сметы">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'items'}
-            className={`budget-tab${activeTab === 'items' ? ' budget-tab--active' : ''}`}
-            onClick={() => setActiveTab('items')}
-          >
-            Позиции
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'calendar'}
-            className={`budget-tab${activeTab === 'calendar' ? ' budget-tab--active' : ''}`}
-            onClick={() => setActiveTab('calendar')}
-          >
-            Календарь
-          </button>
+      <div className="table-card__header budget-view__header">
+        <div className="budget-view__header-left">
+          <div className="donut-card__header-text">
+            <span className="stat-card__icon">
+              <TicketIcon />
+            </span>
+            <h2>Смета</h2>
+          </div>
+
+          <div className="budget-tabs" role="tablist" aria-label="Вид сметы">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'items'}
+              className={`budget-tab${activeTab === 'items' ? ' budget-tab--active' : ''}`}
+              onClick={() => setActiveTab('items')}
+            >
+              Позиции
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'calendar'}
+              className={`budget-tab${activeTab === 'calendar' ? ' budget-tab--active' : ''}`}
+              onClick={() => setActiveTab('calendar')}
+            >
+              Календарь
+            </button>
+          </div>
         </div>
 
-        <div className="budget-total">
-          <div className="budget-total__meta">
-            <span
-              className="status-pill"
-              data-testid="budget-status"
-              data-budget-status={budget.status}
-            >
-              {BUDGET_STATUS_LABEL[budget.status] ?? budget.status}
-            </span>
-            <span className="muted">Ревизия {budget.revision}</span>
+        <div className="budget-view__header-right">
+          <div className="budget-total">
+            <div className="budget-total__meta">
+              <span
+                className="status-pill"
+                data-testid="budget-status"
+                data-budget-status={budget.status}
+              >
+                {BUDGET_STATUS_LABEL[budget.status] ?? budget.status}
+              </span>
+              <span className="muted">Ревизия {budget.revision}</span>
+            </div>
+            <div>
+              <span className="muted">Итого по смете</span> <strong>{budget.total} ₽</strong>
+            </div>
           </div>
-          <div>
-            <span className="muted">Итого по смете</span> <strong>{budget.total} ₽</strong>
-          </div>
+
+          <Link href={`/productions/${budget.productionId}/budget-graph`} className="details-link">
+            Конструктор узлов
+          </Link>
         </div>
       </div>
+
+      <p className="budget-graph-notice muted">
+        Конструктор узлов — отдельный инструмент планирования; суммы в нём не связаны с этой сметой и считаются
+        независимо.
+      </p>
 
       {activeTab === 'calendar' ? (
         workshopOptions.length > 0 ? (

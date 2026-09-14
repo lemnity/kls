@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { PostgresBudgetRepository } from './postgres-budget-repository.js';
 import {
   PostgresWorkshopTaskRepository,
+  WorkshopTaskAfterTaskNotFoundError,
   WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
@@ -369,6 +370,46 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
     await expect(
       client.query("SELECT count(*)::int AS count FROM audit_events WHERE action = 'workshop_task.created' AND subject_id = $1", [task.id]),
     ).resolves.toMatchObject({ rows: [{ count: 1 }] });
+  });
+
+  it('orders graph-node tasks by creation by default, and inserts after a chosen task on request', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+
+    const first = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Раскрой',
+      plannedAmount: '100.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+    });
+    const second = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Пошив',
+      plannedAmount: '100.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+    });
+
+    const appendedOrder = await taskRepository.listGraphNodeTasks(tenant.context, graphNodeId);
+    expect(appendedOrder.map((task) => task.id)).toEqual([first.id, second.id]);
+
+    // Insert a third task between "Раскрой" and "Пошив" instead of appending.
+    const inserted = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Примерка',
+      plannedAmount: '50.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+      afterTaskId: first.id,
+    });
+
+    const finalOrder = await taskRepository.listGraphNodeTasks(tenant.context, graphNodeId);
+    expect(finalOrder.map((task) => task.id)).toEqual([first.id, inserted.id, second.id]);
+
+    await expect(
+      taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+        description: 'X',
+        plannedAmount: '1.00',
+        assigneeMembershipIds: [tenant.context.membershipId],
+        afterTaskId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(WorkshopTaskAfterTaskNotFoundError);
   });
 
   it('rejects creating a graph-node task on a non-workshop node or an assignee outside the tenant', async () => {

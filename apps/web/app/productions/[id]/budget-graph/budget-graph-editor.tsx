@@ -17,6 +17,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { CheckIcon, CrossIcon, UndoIcon } from '../../../icons.js';
+import { useEscapeToClose } from '../../../lib/use-escape-to-close.js';
+
 type BudgetGraphNodeType = 'production' | 'workshop' | 'work' | 'material';
 
 interface StoredBudgetGraphNode {
@@ -197,6 +200,8 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [taskDescription, setTaskDescription] = useState('');
   const [taskAmount, setTaskAmount] = useState('0.00');
   const [taskAssigneeIds, setTaskAssigneeIds] = useState<string[]>([]);
+  const [taskAfterId, setTaskAfterId] = useState('');
+  const [showTaskForm, setShowTaskForm] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [taskCreating, setTaskCreating] = useState(false);
   const [templates, setTemplates] = useState<StoredBudgetTemplate[]>([]);
@@ -208,6 +213,8 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [childCreating, setChildCreating] = useState(false);
 
   const selectedNode = items.find((item) => item.id === selectedId) ?? null;
+
+  useEscapeToClose(Boolean(selectedNode), () => setSelectedId(null));
 
   useEffect(() => {
     if (selectedNode) {
@@ -577,6 +584,7 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
           description: taskDescription,
           plannedAmount: taskAmount,
           assigneeMembershipIds: taskAssigneeIds,
+          ...(taskAfterId ? { afterTaskId: taskAfterId } : {}),
         }),
       });
       if (!response.ok) {
@@ -587,6 +595,8 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
       setTaskDescription('');
       setTaskAmount('0.00');
       setTaskAssigneeIds([]);
+      setTaskAfterId('');
+      setShowTaskForm(false);
       await loadWorkshopExtras(selectedNode.id);
     } finally {
       setTaskCreating(false);
@@ -982,10 +992,16 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
                         <span className={`delta-pill delta-pill--${task.status === 'approved' ? 'positive' : task.status === 'rejected' ? 'negative' : 'neutral'}`}>
                           {TASK_STATUS_LABEL[task.status] ?? task.status}
                         </span>
+                        <p className="budget-graph__assignee-heading">Ответственные</p>
                         <ul className="budget-graph__assignee-list">
                           {task.assignees.map((assignee) => (
                             <li key={assignee.membershipId} className="budget-graph__assignee-row">
-                              <span className={`budget-graph__assignee-dot budget-graph__assignee-dot--${assignee.status}`} aria-hidden="true" />
+                              <span
+                                className={`budget-graph__assignee-avatar${assignee.status === 'done' ? ' budget-graph__assignee-avatar--done' : ''}`}
+                                aria-hidden="true"
+                              >
+                                {assignee.displayName.charAt(0).toUpperCase()}
+                              </span>
                               <span>{assignee.displayName}</span>
                               {assignee.status === 'pending' && task.status === 'new' && (
                                 <button
@@ -999,21 +1015,52 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
                             </li>
                           ))}
                         </ul>
-                        {task.status === 'new' && (
+                        {task.status === 'new' ? (
                           <div className="budget-graph__task-actions">
                             <button
                               type="button"
-                              className="btn-pill btn-pill--accent btn-pill--small"
+                              className="task-decision task-decision--accept"
                               onClick={() => handleLeadDecision(task.id, 'approved')}
                             >
-                              Принято
+                              <span className="task-decision__icon">
+                                <CheckIcon />
+                              </span>
+                              <span className="task-decision__label">Принять</span>
                             </button>
                             <button
                               type="button"
-                              className="btn-pill btn-pill--ghost btn-pill--small"
+                              className="task-decision task-decision--neutral"
+                              disabled
+                              title="Пока не поддерживается: решение о задаче в API финальное, отменить его после «Принять»/«Отказать» нельзя"
+                            >
+                              <span className="task-decision__icon">
+                                <UndoIcon />
+                              </span>
+                              <span className="task-decision__label">Вернуть в работу</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="task-decision task-decision--reject"
                               onClick={() => handleLeadDecision(task.id, 'rejected')}
                             >
-                              Отклонено
+                              <span className="task-decision__icon">
+                                <CrossIcon />
+                              </span>
+                              <span className="task-decision__label">Отказать</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="budget-graph__task-actions">
+                            <button
+                              type="button"
+                              className="task-decision task-decision--neutral"
+                              disabled
+                              title="Пока не поддерживается: решение о задаче в API финальное, отменить его после «Принять»/«Отказать» нельзя"
+                            >
+                              <span className="task-decision__icon">
+                                <UndoIcon />
+                              </span>
+                              <span className="task-decision__label">Вернуть в работу</span>
                             </button>
                           </div>
                         )}
@@ -1022,47 +1069,80 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
                   </ul>
                 )}
 
-                <div className="budget-graph__task-create">
-                  <label className="budget-graph__side-panel-field">
-                    <span>Новая задача</span>
-                    <input
-                      type="text"
-                      placeholder="Описание"
-                      value={taskDescription}
-                      onChange={(event) => setTaskDescription(event.target.value)}
-                    />
-                  </label>
-                  <label className="budget-graph__side-panel-field">
-                    <span>Сумма, ₽</span>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={taskAmount}
-                      onChange={(event) => setTaskAmount(event.target.value)}
-                    />
-                  </label>
-                  <fieldset className="budget-graph__assignee-picker">
-                    <legend>Исполнители</legend>
-                    {memberships.map((membership) => (
-                      <label key={membership.id} className="budget-graph__assignee-option">
-                        <input
-                          type="checkbox"
-                          checked={taskAssigneeIds.includes(membership.id)}
-                          onChange={() => toggleTaskAssignee(membership.id)}
-                        />
-                        {membership.userEmail}
+                {showTaskForm ? (
+                  <div className="budget-graph__task-create">
+                    <label className="budget-graph__side-panel-field">
+                      <span>Название этапа</span>
+                      <input
+                        type="text"
+                        placeholder="Описание"
+                        value={taskDescription}
+                        onChange={(event) => setTaskDescription(event.target.value)}
+                        autoFocus
+                      />
+                    </label>
+                    <label className="budget-graph__side-panel-field">
+                      <span>Сумма, ₽</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={taskAmount}
+                        onChange={(event) => setTaskAmount(event.target.value)}
+                      />
+                    </label>
+                    <fieldset className="budget-graph__assignee-picker">
+                      <legend>Исполнители</legend>
+                      {memberships.map((membership) => (
+                        <label key={membership.id} className="budget-graph__assignee-option">
+                          <input
+                            type="checkbox"
+                            checked={taskAssigneeIds.includes(membership.id)}
+                            onChange={() => toggleTaskAssignee(membership.id)}
+                          />
+                          {membership.userEmail}
+                        </label>
+                      ))}
+                    </fieldset>
+                    {tasks.length > 0 && (
+                      <label className="budget-graph__side-panel-field">
+                        <span>Вставить после</span>
+                        <select value={taskAfterId} onChange={(event) => setTaskAfterId(event.target.value)}>
+                          <option value="">В конец списка</option>
+                          {tasks.map((existingTask) => (
+                            <option key={existingTask.id} value={existingTask.id}>
+                              {existingTask.description}
+                            </option>
+                          ))}
+                        </select>
                       </label>
-                    ))}
-                  </fieldset>
+                    )}
+                    <div className="budget-graph__task-actions">
+                      <button
+                        type="button"
+                        className="btn-pill btn-pill--accent btn-pill--small"
+                        disabled={!taskDescription || taskAssigneeIds.length === 0 || taskCreating}
+                        onClick={handleCreateTask}
+                      >
+                        {taskCreating ? 'Создаём…' : 'Создать этап'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-pill btn-pill--ghost btn-pill--small"
+                        onClick={() => setShowTaskForm(false)}
+                      >
+                        Отмена
+                      </button>
+                    </div>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    className="btn-pill btn-pill--accent btn-pill--small"
-                    disabled={!taskDescription || taskAssigneeIds.length === 0 || taskCreating}
-                    onClick={handleCreateTask}
+                    className="btn-pill btn-pill--ghost btn-pill--small"
+                    onClick={() => setShowTaskForm(true)}
                   >
-                    {taskCreating ? 'Создаём…' : 'Создать задачу'}
+                    + Добавить этап
                   </button>
-                </div>
+                )}
               </div>
             )}
 

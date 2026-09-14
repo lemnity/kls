@@ -173,33 +173,40 @@ export function TaskBoard({
                 {task.status === 'assigned' && (
                   <button
                     type="button"
-                    className="btn-pill btn-pill--accent"
+                    className="task-decision task-decision--accept"
                     disabled={pendingId === task.id}
                     onClick={() => runAction(task.id, `workshop-tasks/${task.id}/accept`, 'POST')}
                   >
-                    <CheckIcon className="icon-inline" />
-                    Принять
+                    <span className="task-decision__icon">
+                      <CheckIcon />
+                    </span>
+                    <span className="task-decision__label">Принять</span>
                   </button>
                 )}
                 {task.status === 'accepted' && (
                   <button
                     type="button"
-                    className="btn-pill btn-pill--accent"
+                    className="task-decision task-decision--accept"
                     disabled={pendingId === task.id}
                     onClick={() => runAction(task.id, `workshop-tasks/${task.id}/complete`, 'POST')}
                   >
-                    <CheckIcon className="icon-inline" />
-                    Выполнено
+                    <span className="task-decision__icon">
+                      <CheckIcon />
+                    </span>
+                    <span className="task-decision__label">Выполнено</span>
                   </button>
                 )}
                 {task.status === 'completed' && (
                   <button
                     type="button"
-                    className="btn-pill btn-pill--accent"
+                    className="task-decision task-decision--accept"
                     disabled={pendingId === task.id}
                     onClick={() => runAction(task.id, `workshop-tasks/${task.id}/close`, 'POST')}
                   >
-                    Закрыть
+                    <span className="task-decision__icon">
+                      <CheckIcon />
+                    </span>
+                    <span className="task-decision__label">Закрыть</span>
                   </button>
                 )}
                 {task.status !== 'closed' && (
@@ -269,8 +276,11 @@ function AssignForm({
           </option>
         ))}
       </select>
-      <button type="submit" className="btn-pill btn-pill--accent" disabled={pending || !selected}>
-        Назначить
+      <button type="submit" className="task-decision task-decision--accept" disabled={pending || !selected}>
+        <span className="task-decision__icon">
+          <CheckIcon />
+        </span>
+        <span className="task-decision__label">Назначить</span>
       </button>
     </form>
   );

@@ -4,7 +4,13 @@ import { useRouter } from 'next/navigation';
 
 import { LogoutIcon } from './icons.js';
 
-export function LogoutButton() {
+export function LogoutButton({
+  className = 'icon-chip icon-chip--logout',
+  showLabel = false,
+}: {
+  className?: string;
+  showLabel?: boolean;
+}) {
   const router = useRouter();
 
   async function handleClick(): Promise<void> {
@@ -14,8 +20,9 @@ export function LogoutButton() {
   }
 
   return (
-    <button type="button" className="icon-chip icon-chip--logout" onClick={handleClick} aria-label="Выйти">
+    <button type="button" className={className} onClick={handleClick} aria-label={showLabel ? undefined : 'Выйти'}>
       <LogoutIcon />
+      {showLabel ? <span>Выйти</span> : <span className="sr-only">Выйти</span>}
     </button>
   );
 }

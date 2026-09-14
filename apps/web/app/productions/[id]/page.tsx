@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../app-shell.js';
-import { TicketIcon } from '../../icons.js';
+import { ArrowLeftIcon, TicketIcon } from '../../icons.js';
 import { apiFetch } from '../../lib/api.js';
 import { formatPremiereDate } from '../../lib/format.js';
 import {
@@ -44,13 +44,10 @@ export default async function ProductionDetailPage({ params }: { params: Promise
   return (
     <AppShell>
       <main className="dashboard-main">
-        <p className="breadcrumb">
-          <Link href="/" className="row-link">
-            ← К дашборду
-          </Link>
-        </p>
-
         <section className="page-intro">
+          <Link href="/" className="icon-btn icon-btn--ghost page-intro__back" aria-label="К дашборду" title="К дашборду">
+            <ArrowLeftIcon />
+          </Link>
           <p className="eyebrow">ПОСТАНОВКА</p>
           <h1>{production.title}</h1>
           <p className="muted">{formatPremiereDate(production.premiereDate)}</p>
@@ -60,26 +57,21 @@ export default async function ProductionDetailPage({ params }: { params: Promise
           <ProductionInfoPanel production={production} memberships={memberships} />
 
           <article className="card budget-card">
-            <div className="table-card__header">
-              <div className="donut-card__header-text">
-                <span className="stat-card__icon">
-                  <TicketIcon />
-                </span>
-                <h2>Смета</h2>
-              </div>
-              {budget && (
-                <Link href={`/productions/${id}/budget-graph`} className="details-link">
-                  Конструктор узлов
-                </Link>
-              )}
-            </div>
-            {budget && (
-              <p className="budget-graph-notice muted">
-                Конструктор узлов — отдельный инструмент планирования; суммы в нём не связаны с этой сметой и
-                считаются независимо.
-              </p>
+            {budget ? (
+              <BudgetView budget={budget} workshopTasks={workshopTasks} />
+            ) : (
+              <>
+                <div className="table-card__header">
+                  <div className="donut-card__header-text">
+                    <span className="stat-card__icon">
+                      <TicketIcon />
+                    </span>
+                    <h2>Смета</h2>
+                  </div>
+                </div>
+                <BudgetEmptyState productionId={id} />
+              </>
             )}
-            {budget ? <BudgetView budget={budget} workshopTasks={workshopTasks} /> : <BudgetEmptyState productionId={id} />}
           </article>
         </div>
       </main>

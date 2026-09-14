@@ -1,18 +1,19 @@
-import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from './app-shell.js';
-import { ArrowUpRightIcon, CalendarIcon, DocumentIcon, LayersIcon, MaskIcon, SortIcon } from './icons.js';
+import { CreateProductionButton } from './create-production-button.js';
+import { ArrowUpRightIcon, CalendarIcon, DocumentIcon, LayersIcon, MaskIcon } from './icons.js';
 import { apiFetch } from './lib/api.js';
-import { formatPremiereDate, healthLabel, humanizeStatus, pluralize, productionStatusTone } from './lib/format.js';
-import { MOCK_PRODUCTIONS, type Production } from './lib/mock-data.js';
+import { formatPremiereDate, humanizeStatus, pluralize } from './lib/format.js';
+import { MOCK_MEMBERSHIPS, MOCK_PRODUCTIONS, type Membership, type Production } from './lib/mock-data.js';
 import { getSessionToken } from './lib/session.js';
+import { ProductionsTable } from './productions-table.js';
 
 export default async function HomePage() {
   const token = await getSessionToken();
   if (!token) redirect('/login');
 
-  const productions = await loadProductions(token);
+  const [productions, memberships] = await Promise.all([loadProductions(token), loadMemberships(token)]);
   if (productions === 'forbidden') {
     return (
       <main className="shell-message">
@@ -53,6 +54,7 @@ export default async function HomePage() {
             <h1>{greetingWord()}, Кулиса</h1>
             <p className="muted">{productionCountLabel(total)}</p>
           </div>
+          <CreateProductionButton memberships={memberships} />
         </section>
 
         <div className="stat-grid">
@@ -176,85 +178,7 @@ export default async function HomePage() {
               <p className="muted">{productionCountLabel(total)}</p>
             </div>
 
-            {productions.length === 0 ? (
-              <p data-testid="productions-empty" className="empty-state">
-                Постановок пока нет.
-              </p>
-            ) : (
-              <div className="table-scroll" data-testid="productions-list">
-                <table className="productions-table table-sortable">
-                  <thead>
-                    <tr>
-                      <th scope="col">
-                        <span className="sr-only">Здоровье</span>
-                      </th>
-                      <th scope="col">
-                        <span className="th-label">
-                          Название <SortIcon className="sort-caret" />
-                        </span>
-                      </th>
-                      <th scope="col">
-                        <span className="th-label">
-                          Статус <SortIcon className="sort-caret" />
-                        </span>
-                      </th>
-                      <th scope="col">
-                        <span className="th-label">
-                          Премьера <SortIcon className="sort-caret" />
-                        </span>
-                      </th>
-                      <th scope="col">
-                        <span className="sr-only">Действия</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {productions.map((production) => (
-                      <tr key={production.id} data-testid="production-card">
-                        <td className="cell-health">
-                          <i
-                            className="health-dot"
-                            data-testid="production-health"
-                            data-health={production.healthStatus}
-                            title={healthLabel(production.healthStatus)}
-                          />
-                          <span className="sr-only">{healthLabel(production.healthStatus)}</span>
-                        </td>
-                        <td className="cell-title">
-                          <span className="row-identity">
-                            <i className="row-avatar" aria-hidden="true">
-                              <MaskIcon />
-                            </i>
-                            <Link href={`/productions/${production.id}`} className="row-link">
-                              {production.title}
-                            </Link>
-                          </span>
-                        </td>
-                        <td>
-                          <span
-                            className="status-pill"
-                            data-testid="production-status"
-                            data-tone={productionStatusTone(production.status)}
-                          >
-                            {production.status}
-                          </span>
-                        </td>
-                        <td className="muted">{formatPremiereDate(production.premiereDate)}</td>
-                        <td className="cell-actions">
-                          <Link
-                            href={`/productions/${production.id}`}
-                            className="icon-btn"
-                            aria-label={`Открыть постановку «${production.title}»`}
-                          >
-                            <ArrowUpRightIcon />
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <ProductionsTable productions={productions} />
           </article>
 
           <article className="card donut-card">
@@ -297,7 +221,7 @@ export default async function HomePage() {
               </>
             )}
 
-            <div className="donut-card__footer">
+            <div className={`donut-card__footer${premiereHighlight ? ' donut-card__footer--spotlight' : ''}`}>
               <span className="muted">{premiereHighlight?.label ?? 'Премьера'}</span>
               {premiereHighlight ? (
                 <p>
@@ -326,6 +250,17 @@ async function loadProductions(token: string): Promise<Production[] | 'forbidden
   if (!response.ok) return 'unavailable';
 
   return (await response.json()) as Production[];
+}
+
+async function loadMemberships(token: string): Promise<Membership[]> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1') {
+    return MOCK_MEMBERSHIPS;
+  }
+
+  const response = await apiFetch('/v1/organization/memberships', { token });
+  if (!response.ok) return [];
+
+  return (await response.json()) as Membership[];
 }
 
 function productionCountLabel(count: number): string {

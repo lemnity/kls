@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { LayersIcon } from '../../icons.js';
+import { useEscapeToClose } from '../../lib/use-escape-to-close.js';
 import {
   formatDateOnly,
   healthLabel,
@@ -30,6 +31,8 @@ export function ProductionInfoPanel({
 
   const producer = memberships.find((membership) => membership.id === production.producerMembershipId);
   const activeMemberships = memberships.filter((membership) => membership.status === 'ACTIVE');
+
+  useEscapeToClose(editing, () => setEditing(false));
 
   function openEdit(): void {
     setTitle(production.title);

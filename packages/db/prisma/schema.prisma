@@ -308,6 +308,10 @@ model WorkshopTask {
   startAt              DateTime?   @map("start_at")
   deadlineAt           DateTime?   @map("deadline_at")
   completedAt          DateTime?   @map("completed_at")
+  /** Fractional-index position among a graph node's tasks ("этапы") — lets a
+      new task be inserted after any existing one (new midpoint value)
+      without renumbering the rest. Not used by classic budget-item tasks. */
+  sortOrder            Decimal     @default(0) @map("sort_order") @db.Decimal(30, 10)
   createdAt            DateTime    @default(now()) @map("created_at")
   updatedAt            DateTime    @updatedAt @map("updated_at")
   tenant               Tenant      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
@@ -325,6 +329,7 @@ model WorkshopTask {
   @@index([tenantId, workshopId])
   @@index([tenantId, status])
   @@index([tenantId, graphNodeId])
+  @@index([tenantId, graphNodeId, sortOrder])
   @@map("workshop_tasks")
 }
 

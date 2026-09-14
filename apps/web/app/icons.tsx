@@ -138,6 +138,15 @@ export function ArrowUpRightIcon({ className }: IconProps) {
   );
 }
 
+export function ArrowLeftIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <path d="M11 6 5 12l6 6" />
+    </svg>
+  );
+}
+
 export function TicketIcon({ className }: IconProps) {
   return (
     <svg {...BASE_PROPS} className={className}>
@@ -177,10 +186,54 @@ export function ClipboardIcon({ className }: IconProps) {
   );
 }
 
+export function SunIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <circle cx="12" cy="12" r="4.2" />
+      <path d="M12 2.5v2.4M12 19.1v2.4M21.5 12h-2.4M4.9 12H2.5M18.2 5.8l-1.7 1.7M7.5 16.5l-1.7 1.7M18.2 18.2l-1.7-1.7M7.5 7.5 5.8 5.8" />
+    </svg>
+  );
+}
+
+export function PlusIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className} strokeWidth={2.2}>
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  );
+}
+
+export function MoonIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <path d="M20 14.2A8.5 8.5 0 1 1 9.8 4a6.8 6.8 0 0 0 10.2 10.2Z" />
+    </svg>
+  );
+}
+
 export function CheckIcon({ className }: IconProps) {
   return (
     <svg {...BASE_PROPS} className={className} strokeWidth={2.2}>
       <path d="M5 12.5 9.5 17 19 6.5" />
+    </svg>
+  );
+}
+
+export function CrossIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className} strokeWidth={2.2}>
+      <line x1="6" y1="6" x2="18" y2="18" />
+      <line x1="18" y1="6" x2="6" y2="18" />
+    </svg>
+  );
+}
+
+export function UndoIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className} strokeWidth={2}>
+      <path d="M6 8 3 11l3 3" />
+      <path d="M3 11h11a5.5 5.5 0 1 1 0 11H9" />
     </svg>
   );
 }

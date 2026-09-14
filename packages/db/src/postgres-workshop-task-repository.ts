@@ -34,6 +34,9 @@ export interface CreateTaskForGraphNodeInput {
   plannedAmount: string;
   assigneeMembershipIds: string[];
   deadlineAt?: string;
+  /** Insert the new task's position right after this existing task on the
+      same graph node, instead of appending at the end. */
+  afterTaskId?: string;
 }
 
 export interface CreateTaskForWorkshopInput {
@@ -85,6 +88,13 @@ export class WorkshopTaskAssigneeNotFoundError extends Error {
   public constructor(public readonly assigneeMembershipId: string) {
     super(`Assignee membership ${assigneeMembershipId} not found in tenant`);
     this.name = 'WorkshopTaskAssigneeNotFoundError';
+  }
+}
+
+export class WorkshopTaskAfterTaskNotFoundError extends Error {
+  public constructor(public readonly afterTaskId: string) {
+    super(`Task ${afterTaskId} to insert after not found on this graph node`);
+    this.name = 'WorkshopTaskAfterTaskNotFoundError';
   }
 }
 
@@ -353,15 +363,17 @@ export class PostgresWorkshopTaskRepository {
     const missing = input.assigneeMembershipIds.find((id) => !foundIds.has(id));
     if (missing) throw new WorkshopTaskAssigneeNotFoundError(missing);
 
+    const sortOrder = await this.resolveGraphNodeTaskSortOrder(context, graphNodeId, input.afterTaskId);
+
     const taskId = randomUUID();
     const assigneeRowIds = input.assigneeMembershipIds.map(() => randomUUID());
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH created AS (
          INSERT INTO workshop_tasks (
            id, tenant_id, budget_item_id, graph_node_id, production_id, workshop_id,
-           assignee_membership_id, status, description, planned_amount, deadline_at, updated_at
+           assignee_membership_id, status, description, planned_amount, deadline_at, sort_order, updated_at
          )
-         VALUES ($1, $2, NULL, $3, $4, $5, NULL, $6, $7, $8::numeric, $9::timestamptz, NOW())
+         VALUES ($1, $2, NULL, $3, $4, $5, NULL, $6, $7, $8::numeric, $9::timestamptz, $14::numeric, NOW())
          RETURNING ${TASK_RAW_COLUMNS}
        ), assignees_inserted AS (
          INSERT INTO task_assignees (id, tenant_id, task_id, membership_id, status)
@@ -388,10 +400,57 @@ export class PostgresWorkshopTaskRepository {
         input.assigneeMembershipIds,
         randomUUID(),
         context.membershipId,
+        sortOrder,
       ],
     );
 
     return { ...result.rows[0]!, assignees: await this.listAssignees(context, taskId) };
+  }
+
+  /**
+   * Fractional-index position for a new graph-node task ("этап"). No
+   * `afterTaskId` appends at the end (max + 1); given one, the new task
+   * sits at the midpoint between it and whichever task currently comes
+   * right after it (or +1 past it, if it's currently last) — an ordinary
+   * insert-between that never has to renumber existing rows.
+   */
+  private async resolveGraphNodeTaskSortOrder(
+    context: TenantContext,
+    graphNodeId: string,
+    afterTaskId: string | undefined,
+  ): Promise<string> {
+    if (!afterTaskId) {
+      const appended = await this.client.query<{ next: string }>(
+        `SELECT (COALESCE(MAX(sort_order), 0) + 1)::text AS next
+         FROM workshop_tasks WHERE tenant_id = $1 AND graph_node_id = $2`,
+        [context.tenantId, graphNodeId],
+      );
+      return appended.rows[0]!.next;
+    }
+
+    const after = await this.client.query<{ sortOrder: string }>(
+      `SELECT sort_order AS "sortOrder" FROM workshop_tasks
+       WHERE tenant_id = $1 AND graph_node_id = $2 AND id = $3`,
+      [context.tenantId, graphNodeId, afterTaskId],
+    );
+    const afterRow = after.rows[0];
+    if (!afterRow) throw new WorkshopTaskAfterTaskNotFoundError(afterTaskId);
+
+    const next = await this.client.query<{ sortOrder: string }>(
+      `SELECT sort_order AS "sortOrder" FROM workshop_tasks
+       WHERE tenant_id = $1 AND graph_node_id = $2 AND sort_order > $3::numeric
+       ORDER BY sort_order ASC LIMIT 1`,
+      [context.tenantId, graphNodeId, afterRow.sortOrder],
+    );
+    const nextRow = next.rows[0];
+
+    const computed = await this.client.query<{ value: string }>(
+      nextRow
+        ? `SELECT (($1::numeric + $2::numeric) / 2)::text AS value`
+        : `SELECT ($1::numeric + 1)::text AS value`,
+      nextRow ? [afterRow.sortOrder, nextRow.sortOrder] : [afterRow.sortOrder],
+    );
+    return computed.rows[0]!.value;
   }
 
   public async listGraphNodeTasks(
@@ -402,7 +461,7 @@ export class PostgresWorkshopTaskRepository {
       `SELECT ${TASK_COLUMNS}
        FROM workshop_tasks
        WHERE tenant_id = $1 AND graph_node_id = $2
-       ORDER BY created_at ASC`,
+       ORDER BY sort_order ASC`,
       [context.tenantId, graphNodeId],
     );
 

@@ -65,6 +65,7 @@ import {
   type StoredWorkshop,
 } from '@kulisa/db/workshop-repository';
 import {
+  WorkshopTaskAfterTaskNotFoundError,
   WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
   WorkshopTaskAssigneeNotFoundError,
@@ -957,6 +958,9 @@ class HealthController {
     }
     if (error instanceof WorkshopTaskGraphNodeNotWorkshopError) {
       return new BadRequestException('Tasks can only be created on a workshop-type graph node');
+    }
+    if (error instanceof WorkshopTaskAfterTaskNotFoundError) {
+      return new BadRequestException('Task to insert after not found on this graph node');
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
@@ -1977,11 +1981,15 @@ function readCreateGraphNodeTaskInput(body: unknown): CreateTaskForGraphNodeInpu
     assigneeMembershipIds.push(raw);
   }
 
+  const afterTaskId = readOptionalUuid(input.afterTaskId);
+  if (afterTaskId === null) return null;
+
   return {
     description,
     plannedAmount,
     assigneeMembershipIds,
     ...(deadlineAt ? { deadlineAt } : {}),
+    ...(afterTaskId ? { afterTaskId } : {}),
   };
 }
 

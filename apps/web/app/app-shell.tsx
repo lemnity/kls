@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
-import { LogoutButton } from './logout-button.js';
-import { BellIcon, ChevronDownIcon, LogoMark, SearchIcon } from './icons.js';
+import { ProfileMenu } from './profile-menu.js';
+import { BellIcon, LogoMark } from './icons.js';
 
 type ActiveSection = 'dashboard' | 'workshops';
 
@@ -42,28 +42,16 @@ export function AppShell({ children, active = 'dashboard' }: { children: ReactNo
         </nav>
 
         <div className="topbar-actions">
-          <button type="button" className="icon-chip" aria-label="Поиск">
-            <SearchIcon />
-          </button>
-          <button type="button" className="icon-chip" aria-label="Уведомления">
+          {/* No notification backend exists yet — marked "soon" rather than
+              a live-looking control that does nothing on click, same as the
+              upcoming nav tabs above. */}
+          <span className="icon-chip icon-chip--soon" aria-disabled="true" title="Уведомления · скоро">
             <BellIcon />
-            <i className="icon-chip__badge" aria-hidden="true" />
-          </button>
+          </span>
 
           <span className="topbar-divider" aria-hidden="true" />
 
-          <button type="button" className="profile" aria-label="Профиль: Кулиса, Постановочная часть">
-            <span className="profile-avatar" aria-hidden="true">
-              К
-            </span>
-            <span className="profile-meta">
-              <strong>Кулиса</strong>
-              <span className="muted">Постановочная часть</span>
-            </span>
-            <ChevronDownIcon className="profile-chevron" />
-          </button>
-
-          <LogoutButton />
+          <ProfileMenu />
         </div>
       </header>
 

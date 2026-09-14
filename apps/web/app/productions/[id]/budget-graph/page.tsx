@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { AppShell } from '../../../app-shell.js';
+import { ArrowLeftIcon } from '../../../icons.js';
 import { apiFetch } from '../../../lib/api.js';
 import { MOCK_BUDGETS, MOCK_PRODUCTIONS } from '../../../lib/mock-data.js';
 import { getSessionToken } from '../../../lib/session.js';
@@ -46,13 +47,15 @@ export default async function BudgetGraphPage({ params }: { params: Promise<{ id
   return (
     <AppShell>
       <main className="dashboard-main">
-        <p className="breadcrumb">
-          <Link href={`/productions/${id}`} className="row-link">
-            ← К постановке
-          </Link>
-        </p>
-
         <section className="page-intro">
+          <Link
+            href={`/productions/${id}`}
+            className="icon-btn icon-btn--ghost page-intro__back"
+            aria-label="К постановке"
+            title="К постановке"
+          >
+            <ArrowLeftIcon />
+          </Link>
           <p className="eyebrow">ВИЗУАЛЬНЫЙ КОНСТРУКТОР СМЕТЫ</p>
           <h1>{production.title}</h1>
         </section>

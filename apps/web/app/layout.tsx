@@ -1,11 +1,12 @@
 import type { Metadata } from 'next';
-import { Manrope } from 'next/font/google';
+import { Rubik } from 'next/font/google';
 import './styles.css';
+import { ThemeScript } from './theme-script.js';
 
-const manrope = Manrope({
+const rubik = Rubik({
   subsets: ['latin', 'cyrillic'],
-  weight: ['500', '600', '700', '800'],
-  variable: '--font-manrope',
+  weight: ['400', '500', '600', '700', '800', '900'],
+  variable: '--font-rubik',
   display: 'swap',
 });
 
@@ -16,7 +17,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ru" className={manrope.variable}>
+    <html lang="ru" className={rubik.variable} suppressHydrationWarning>
+      <head>
+        <ThemeScript />
+      </head>
       <body>{children}</body>
     </html>
   );
