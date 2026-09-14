@@ -29,16 +29,25 @@ import {
   BudgetGraphRevisionConflictError,
 } from '@kulisa/db/budget-graph-repository';
 import {
+  WorkshopTaskAlreadyCompletedError,
   WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
+  WorkshopTaskAlreadyRejectedError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
-  WorkshopTaskClosedError,
   WorkshopTaskGraphNodeNotFoundError,
   WorkshopTaskGraphNodeNotWorkshopError,
-  WorkshopTaskInvalidTransitionError,
+  WorkshopTaskRejectedError,
 } from '@kulisa/db/workshop-task-repository';
+
+const DEFAULT_TASK_STAGES = [
+  { id: 'stage-1', label: 'Новая', status: 'in_progress', sortOrder: '1', startedAt: '2026-09-08T00:00:00Z', completedAt: null },
+  { id: 'stage-2', label: 'Назначена', status: 'pending', sortOrder: '2', startedAt: null, completedAt: null },
+  { id: 'stage-3', label: 'Принята', status: 'pending', sortOrder: '3', startedAt: null, completedAt: null },
+  { id: 'stage-4', label: 'Выполнена', status: 'pending', sortOrder: '4', startedAt: null, completedAt: null },
+  { id: 'stage-5', label: 'Закрыта', status: 'pending', sortOrder: '5', startedAt: null, completedAt: null },
+];
 import { NodeAttachmentNodeNotFoundError } from '@kulisa/db/node-attachment-repository';
 
 describe('API health endpoints', () => {
@@ -999,10 +1008,12 @@ describe('API health endpoints', () => {
       productionId: 'production-a',
       workshopId,
       assigneeMembershipId: null,
-      status: 'new',
+      status: 'active',
       description: 'Сшить костюм',
       deadlineAt: null,
       completedAt: null,
+      rejectedAt: null,
+      stages: DEFAULT_TASK_STAGES,
     };
     const app = await createApiApp({
       sessionAuthenticator: authenticator,
@@ -1118,20 +1129,32 @@ describe('API health endpoints', () => {
         url: `/v1/workshop-tasks/${taskId}/assign`,
         payload: { assigneeMembershipId: taskId },
       });
-      const accept = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/accept` });
-      const complete = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/complete` });
-      const close = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/close` });
+      const addStage = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/stages`,
+        payload: { label: 'Доп. этап' },
+      });
+      const editStage = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/stages/22222222-2222-4222-8222-222222222222`,
+        payload: { label: 'X' },
+      });
+      const advance = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/advance` });
+      const revert = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/revert` });
+      const reject = await app.inject({ method: 'POST', url: `/v1/workshop-tasks/${taskId}/reject` });
 
       expect(assign.statusCode).toBe(401);
-      expect(accept.statusCode).toBe(401);
-      expect(complete.statusCode).toBe(401);
-      expect(close.statusCode).toBe(401);
+      expect(addStage.statusCode).toBe(401);
+      expect(editStage.statusCode).toBe(401);
+      expect(advance.statusCode).toBe(401);
+      expect(revert.statusCode).toBe(401);
+      expect(reject.statusCode).toBe(401);
     } finally {
       await app.close();
     }
   });
 
-  it('walks a task through assign, accept, complete and close', async () => {
+  it('walks a task through assign, add-stage, edit-stage, advance, revert and reject', async () => {
     const authenticator: SessionAuthenticator = {
       async authenticate() {
         return {
@@ -1148,10 +1171,12 @@ describe('API health endpoints', () => {
       productionId: 'production-a',
       workshopId: 'workshop-a',
       assigneeMembershipId: null as string | null,
-      status: 'new',
+      status: 'active',
       description: 'Сшить костюм',
       deadlineAt: null,
       completedAt: null as string | null,
+      rejectedAt: null as string | null,
+      stages: DEFAULT_TASK_STAGES,
     };
     const app = await createApiApp({
       sessionAuthenticator: authenticator,
@@ -1163,17 +1188,31 @@ describe('API health endpoints', () => {
         async listTasksByWorkshop() {
           return [];
         },
-        async assignTask(_: unknown, id: string, assigneeMembershipId: string) {
-          return { ...baseTask, status: 'assigned', assigneeMembershipId };
+        async assignTask(_: unknown, __: string, assigneeMembershipId: string) {
+          return { ...baseTask, assigneeMembershipId };
         },
-        async acceptTask() {
-          return { ...baseTask, status: 'accepted', assigneeMembershipId: assigneeId };
+        async addTaskStage(_: unknown, __: string, input: { label: string }) {
+          return { ...baseTask, assigneeMembershipId: assigneeId, stages: [...DEFAULT_TASK_STAGES, { ...DEFAULT_TASK_STAGES[4]!, id: 'stage-6', label: input.label, status: 'pending' }] };
         },
-        async completeTask() {
-          return { ...baseTask, status: 'completed', assigneeMembershipId: assigneeId, completedAt: '2026-09-08T00:00:00Z' };
+        async editTaskStage(_: unknown, __: string, ___: string, input: { label: string }) {
+          return { ...baseTask, assigneeMembershipId: assigneeId, stages: [{ ...DEFAULT_TASK_STAGES[0]!, label: input.label }, ...DEFAULT_TASK_STAGES.slice(1)] };
         },
-        async closeTask() {
-          return { ...baseTask, status: 'closed', assigneeMembershipId: assigneeId, completedAt: '2026-09-08T00:00:00Z' };
+        async advanceTask() {
+          return {
+            ...baseTask,
+            assigneeMembershipId: assigneeId,
+            stages: [
+              { ...DEFAULT_TASK_STAGES[0]!, status: 'done', completedAt: '2026-09-08T00:00:00Z' },
+              { ...DEFAULT_TASK_STAGES[1]!, status: 'in_progress', startedAt: '2026-09-08T00:00:00Z' },
+              ...DEFAULT_TASK_STAGES.slice(2),
+            ],
+          };
+        },
+        async revertTask() {
+          return { ...baseTask, assigneeMembershipId: assigneeId, stages: DEFAULT_TASK_STAGES };
+        },
+        async rejectTask() {
+          return { ...baseTask, status: 'rejected', assigneeMembershipId: assigneeId, rejectedAt: '2026-09-08T00:00:00Z' };
         },
       },
     } as never);
@@ -1185,30 +1224,47 @@ describe('API health endpoints', () => {
         headers: { authorization: 'Bearer token-a' },
         payload: { assigneeMembershipId: assigneeId },
       });
-      const accept = await app.inject({
+      const addStage = await app.inject({
         method: 'POST',
-        url: `/v1/workshop-tasks/${taskId}/accept`,
+        url: `/v1/workshop-tasks/${taskId}/stages`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { label: 'Согласование' },
+      });
+      const editStage = await app.inject({
+        method: 'PATCH',
+        url: `/v1/workshop-tasks/${taskId}/stages/55555555-5555-4555-8555-555555555555`,
+        headers: { authorization: 'Bearer token-a' },
+        payload: { label: 'Заявка создана' },
+      });
+      const advance = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${taskId}/advance`,
         headers: { authorization: 'Bearer token-a' },
       });
-      const complete = await app.inject({
+      const revert = await app.inject({
         method: 'POST',
-        url: `/v1/workshop-tasks/${taskId}/complete`,
+        url: `/v1/workshop-tasks/${taskId}/revert`,
         headers: { authorization: 'Bearer token-a' },
       });
-      const close = await app.inject({
+      const reject = await app.inject({
         method: 'POST',
-        url: `/v1/workshop-tasks/${taskId}/close`,
+        url: `/v1/workshop-tasks/${taskId}/reject`,
         headers: { authorization: 'Bearer token-a' },
       });
 
       expect(assign.statusCode).toBe(200);
-      expect(assign.json()).toMatchObject({ status: 'assigned', assigneeMembershipId: assigneeId });
-      expect(accept.statusCode).toBe(200);
-      expect(accept.json()).toMatchObject({ status: 'accepted' });
-      expect(complete.statusCode).toBe(200);
-      expect(complete.json()).toMatchObject({ status: 'completed', completedAt: '2026-09-08T00:00:00Z' });
-      expect(close.statusCode).toBe(200);
-      expect(close.json()).toMatchObject({ status: 'closed' });
+      expect(assign.json()).toMatchObject({ assigneeMembershipId: assigneeId });
+      expect(addStage.statusCode).toBe(201); // creates a new stage resource, like every other create endpoint
+      expect(addStage.json().stages).toHaveLength(6);
+      expect(editStage.statusCode).toBe(200);
+      expect(editStage.json().stages[0]).toMatchObject({ label: 'Заявка создана' });
+      expect(advance.statusCode).toBe(200);
+      expect(advance.json().stages[0]).toMatchObject({ status: 'done' });
+      expect(advance.json().stages[1]).toMatchObject({ status: 'in_progress' });
+      expect(revert.statusCode).toBe(200);
+      expect(revert.json().stages[0]).toMatchObject({ status: 'in_progress' });
+      expect(reject.statusCode).toBe(200);
+      expect(reject.json()).toMatchObject({ status: 'rejected', rejectedAt: '2026-09-08T00:00:00Z' });
     } finally {
       await app.close();
     }
@@ -1223,9 +1279,11 @@ describe('API health endpoints', () => {
         };
       },
     };
-    const wrongStatusId = '11111111-1111-4111-8111-111111111111';
+    const rejectedId = '11111111-1111-4111-8111-111111111111';
     const unknownAssigneeId = '22222222-2222-4222-8222-222222222222';
     const missingId = '33333333-3333-4333-8333-333333333333';
+    const graphNodeTaskId = '44444444-4444-4444-8444-444444444444';
+    const alreadyCompletedId = '55555555-5555-4555-8555-555555555555';
     const app = await createApiApp({
       sessionAuthenticator: authenticator,
       permissionResolver: { async hasPermission() { return true; } },
@@ -1239,31 +1297,30 @@ describe('API health endpoints', () => {
         async assignTask(_: unknown, id: string, assigneeMembershipId: string) {
           if (id === missingId) return null;
           if (assigneeMembershipId === unknownAssigneeId) throw new WorkshopTaskAssigneeNotFoundError(unknownAssigneeId);
-          throw new WorkshopTaskInvalidTransitionError(id, 'new', 'assigned');
+          throw new WorkshopTaskRejectedError(id);
         },
-        async acceptTask(_: unknown, id: string) {
+        async advanceTask(_: unknown, id: string) {
           if (id === missingId) return null;
-          throw new WorkshopTaskInvalidTransitionError(id, 'assigned', 'new');
+          if (id === alreadyCompletedId) throw new WorkshopTaskAlreadyCompletedError(id);
+          throw new WorkshopTaskRejectedError(id);
         },
-        async completeTask() {
-          throw new Error('not used in this test');
-        },
-        async closeTask() {
+        async rejectTask(_: unknown, id: string) {
+          if (id === graphNodeTaskId) throw new WorkshopTaskAlreadyRejectedError(id);
           throw new Error('not used in this test');
         },
       },
     } as never);
 
     try {
-      const invalidTransition = await app.inject({
+      const rejectedTaskTransition = await app.inject({
         method: 'PATCH',
-        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        url: `/v1/workshop-tasks/${rejectedId}/assign`,
         headers: { authorization: 'Bearer token-a' },
-        payload: { assigneeMembershipId: wrongStatusId },
+        payload: { assigneeMembershipId: rejectedId },
       });
       const unknownAssignee = await app.inject({
         method: 'PATCH',
-        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        url: `/v1/workshop-tasks/${rejectedId}/assign`,
         headers: { authorization: 'Bearer token-a' },
         payload: { assigneeMembershipId: unknownAssigneeId },
       });
@@ -1271,24 +1328,36 @@ describe('API health endpoints', () => {
         method: 'PATCH',
         url: `/v1/workshop-tasks/${missingId}/assign`,
         headers: { authorization: 'Bearer token-a' },
-        payload: { assigneeMembershipId: wrongStatusId },
+        payload: { assigneeMembershipId: rejectedId },
       });
-      const acceptInvalid = await app.inject({
+      const advanceRejected = await app.inject({
         method: 'POST',
-        url: `/v1/workshop-tasks/${wrongStatusId}/accept`,
+        url: `/v1/workshop-tasks/${rejectedId}/advance`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const advanceAlreadyCompleted = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${alreadyCompletedId}/advance`,
+        headers: { authorization: 'Bearer token-a' },
+      });
+      const rejectAlreadyRejected = await app.inject({
+        method: 'POST',
+        url: `/v1/workshop-tasks/${graphNodeTaskId}/reject`,
         headers: { authorization: 'Bearer token-a' },
       });
       const invalidPayload = await app.inject({
         method: 'PATCH',
-        url: `/v1/workshop-tasks/${wrongStatusId}/assign`,
+        url: `/v1/workshop-tasks/${rejectedId}/assign`,
         headers: { authorization: 'Bearer token-a' },
         payload: { assigneeMembershipId: 'not-a-uuid' },
       });
 
-      expect(invalidTransition.statusCode).toBe(409);
+      expect(rejectedTaskTransition.statusCode).toBe(409);
       expect(unknownAssignee.statusCode).toBe(400);
       expect(assignMissing.statusCode).toBe(404);
-      expect(acceptInvalid.statusCode).toBe(409);
+      expect(advanceRejected.statusCode).toBe(409);
+      expect(advanceAlreadyCompleted.statusCode).toBe(409);
+      expect(rejectAlreadyRejected.statusCode).toBe(409);
       expect(invalidPayload.statusCode).toBe(400);
     } finally {
       await app.close();
@@ -1358,15 +1427,6 @@ describe('API health endpoints', () => {
         async assignTask() {
           throw new Error('not used in this test');
         },
-        async acceptTask() {
-          throw new Error('not used in this test');
-        },
-        async completeTask() {
-          throw new Error('not used in this test');
-        },
-        async closeTask() {
-          throw new Error('not used in this test');
-        },
         async rescheduleTaskDeadline(context: unknown, id: string, deadlineAt: string | null, reason: string) {
           rescheduleCalls.push({ context, id, deadlineAt, reason });
           return {
@@ -1375,10 +1435,12 @@ describe('API health endpoints', () => {
             productionId: 'production-a',
             workshopId: 'workshop-a',
             assigneeMembershipId: null,
-            status: 'new',
+            status: 'active',
             description: 'Сшить костюм',
             deadlineAt,
             completedAt: null,
+            rejectedAt: null,
+            stages: DEFAULT_TASK_STAGES,
           };
         },
       },
@@ -1421,7 +1483,7 @@ describe('API health endpoints', () => {
     }
   });
 
-  it('maps a closed-task reschedule to 409 and an unknown task to 404', async () => {
+  it('maps a rejected-task reschedule to 409 and an unknown task to 404', async () => {
     const authenticator: SessionAuthenticator = {
       async authenticate() {
         return {
@@ -1430,7 +1492,7 @@ describe('API health endpoints', () => {
         };
       },
     };
-    const closedId = '11111111-1111-4111-8111-111111111111';
+    const rejectedId = '11111111-1111-4111-8111-111111111111';
     const missingId = '22222222-2222-4222-8222-222222222222';
     const app = await createApiApp({
       sessionAuthenticator: authenticator,
@@ -1445,26 +1507,17 @@ describe('API health endpoints', () => {
         async assignTask() {
           throw new Error('not used in this test');
         },
-        async acceptTask() {
-          throw new Error('not used in this test');
-        },
-        async completeTask() {
-          throw new Error('not used in this test');
-        },
-        async closeTask() {
-          throw new Error('not used in this test');
-        },
         async rescheduleTaskDeadline(_: unknown, id: string) {
           if (id === missingId) return null;
-          throw new WorkshopTaskClosedError(id);
+          throw new WorkshopTaskRejectedError(id);
         },
       },
     } as never);
 
     try {
-      const closed = await app.inject({
+      const rejected = await app.inject({
         method: 'PATCH',
-        url: `/v1/workshop-tasks/${closedId}/deadline`,
+        url: `/v1/workshop-tasks/${rejectedId}/deadline`,
         headers: { authorization: 'Bearer token-a' },
         payload: { deadlineAt: '2026-12-24', reason: 'причина' },
       });
@@ -1475,7 +1528,7 @@ describe('API health endpoints', () => {
         payload: { deadlineAt: '2026-12-24', reason: 'причина' },
       });
 
-      expect(closed.statusCode).toBe(409);
+      expect(rejected.statusCode).toBe(409);
       expect(missing.statusCode).toBe(404);
     } finally {
       await app.close();

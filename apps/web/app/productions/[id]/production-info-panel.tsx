@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { LayersIcon } from '../../icons.js';
+import { ChevronDownIcon, LayersIcon } from '../../icons.js';
 import { useEscapeToClose } from '../../lib/use-escape-to-close.js';
 import {
   formatDateOnly,
@@ -21,6 +21,7 @@ export function ProductionInfoPanel({
   memberships: Membership[];
 }) {
   const router = useRouter();
+  const [collapsed, setCollapsed] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(production.title);
   const [status, setStatus] = useState(production.status);
@@ -72,7 +73,7 @@ export function ProductionInfoPanel({
   }
 
   return (
-    <article className="card">
+    <article className={`card${collapsed ? ' production-info-panel--collapsed' : ''}`}>
       <div className="table-card__header">
         <div className="donut-card__header-text">
           <span className="stat-card__icon">
@@ -80,46 +81,61 @@ export function ProductionInfoPanel({
           </span>
           <h2>Сведения</h2>
         </div>
-        <button type="button" className="details-link" onClick={openEdit}>
-          Редактировать
-        </button>
+        <div className="table-card__header-actions">
+          <button type="button" className="details-link" onClick={openEdit}>
+            Редактировать
+          </button>
+          <button
+            type="button"
+            className="icon-btn icon-btn--ghost production-info-panel__collapse-toggle"
+            aria-expanded={!collapsed}
+            aria-controls="production-info-panel-body"
+            aria-label={collapsed ? 'Развернуть сведения' : 'Свернуть сведения'}
+            title={collapsed ? 'Развернуть сведения' : 'Свернуть сведения'}
+            onClick={() => setCollapsed((current) => !current)}
+          >
+            <ChevronDownIcon className={collapsed ? 'production-info-panel__collapse-icon--collapsed' : ''} />
+          </button>
+        </div>
       </div>
 
-      <dl className="meta-list">
-        <div>
-          <dt>Статус</dt>
-          <dd>
-            <span className="status-pill" data-tone={productionStatusTone(production.status)}>
-              {production.status}
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt>Здоровье</dt>
-          <dd>
-            <i
-              className="health-dot"
-              data-health={production.healthStatus}
-              title={healthLabel(production.healthStatus)}
-            />{' '}
-            <span className="muted">{healthValueLabel(production.healthStatus)}</span>
-            {production.healthReason && (
-              <>
-                <br />
-                <span className="meta-list__note muted">{production.healthReason}</span>
-              </>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Премьера</dt>
-          <dd>{formatDateOnly(production.premiereDate)}</dd>
-        </div>
-        <div>
-          <dt>Продюсер</dt>
-          <dd>{producer ? producer.userEmail : 'Не назначен'}</dd>
-        </div>
-      </dl>
+      {!collapsed && (
+        <dl id="production-info-panel-body" className="meta-list">
+          <div>
+            <dt>Статус</dt>
+            <dd>
+              <span className="status-pill" data-tone={productionStatusTone(production.status)}>
+                {production.status}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt>Здоровье</dt>
+            <dd>
+              <i
+                className="health-dot"
+                data-health={production.healthStatus}
+                title={healthLabel(production.healthStatus)}
+              />{' '}
+              <span className="muted">{healthValueLabel(production.healthStatus)}</span>
+              {production.healthReason && (
+                <>
+                  <br />
+                  <span className="meta-list__note muted">{production.healthReason}</span>
+                </>
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Премьера</dt>
+            <dd>{formatDateOnly(production.premiereDate)}</dd>
+          </div>
+          <div>
+            <dt>Продюсер</dt>
+            <dd>{producer ? producer.userEmail : 'Не назначен'}</dd>
+          </div>
+        </dl>
+      )}
 
       {editing && (
         <div className="task-modal-backdrop" onClick={() => setEditing(false)}>

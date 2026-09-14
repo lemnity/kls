@@ -3,6 +3,17 @@
 import { useState } from 'react';
 
 import { CheckIcon, ClipboardIcon } from '../../icons.js';
+import { canRevertTask, currentStageLabel, stageVisualState } from '../../lib/task-stages.js';
+import { TaskDecisionButtons } from '../../task-stage-controls.js';
+
+interface TaskStage {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'done';
+  sortOrder: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
 
 interface Task {
   id: string;
@@ -14,6 +25,8 @@ interface Task {
   description: string;
   deadlineAt: string | null;
   completedAt: string | null;
+  rejectedAt: string | null;
+  stages: TaskStage[];
 }
 
 interface MembershipOption {
@@ -21,16 +34,22 @@ interface MembershipOption {
   userEmail: string;
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  new: 'Новая',
-  assigned: 'Назначена',
-  accepted: 'Принята',
-  completed: 'Выполнена',
-  closed: 'Закрыта',
+type TaskBucket = 'active' | 'completed' | 'rejected';
+
+const BUCKET_LABEL: Record<TaskBucket, string> = {
+  active: 'Активна',
+  completed: 'Завершена',
+  rejected: 'Отклонена',
 };
 
+function taskBucket(task: Task): TaskBucket {
+  if (task.rejectedAt) return 'rejected';
+  if (task.completedAt) return 'completed';
+  return 'active';
+}
+
 function isOverdue(task: Task): boolean {
-  if (!task.deadlineAt || task.status === 'completed' || task.status === 'closed') return false;
+  if (!task.deadlineAt || task.completedAt || task.rejectedAt) return false;
   return new Date(task.deadlineAt).getTime() < Date.now();
 }
 
@@ -50,7 +69,7 @@ export function TaskBoard({
   const [onlyMine, setOnlyMine] = useState(false);
   const [onlyWithDeadline, setOnlyWithDeadline] = useState(false);
   const [onlyOverdue, setOnlyOverdue] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('');
+  const [bucketFilter, setBucketFilter] = useState<'' | TaskBucket>('');
 
   function updateTask(next: Task): void {
     setTasks((current) => current.map((task) => (task.id === next.id ? next : task)));
@@ -97,7 +116,7 @@ export function TaskBoard({
     if (onlyMine && task.assigneeMembershipId !== currentMembershipId) return false;
     if (onlyWithDeadline && !task.deadlineAt) return false;
     if (onlyOverdue && !isOverdue(task)) return false;
-    if (statusFilter && task.status !== statusFilter) return false;
+    if (bucketFilter && taskBucket(task) !== bucketFilter) return false;
     return true;
   });
 
@@ -127,9 +146,9 @@ export function TaskBoard({
         </label>
         <label className="task-filter-select">
           <span className="sr-only">Статус</span>
-          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+          <select value={bucketFilter} onChange={(event) => setBucketFilter(event.target.value as '' | TaskBucket)}>
             <option value="">Все статусы</option>
-            {Object.entries(STATUS_LABEL).map(([value, label]) => (
+            {(Object.entries(BUCKET_LABEL) as [TaskBucket, string][]).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
@@ -142,100 +161,81 @@ export function TaskBoard({
         <p className="empty-state">Ничего не найдено — измените фильтры.</p>
       ) : (
         <ul className="task-board">
-          {filteredTasks.map((task) => (
-            <li key={task.id} className="task-row" data-testid="task-row">
-              <div className="task-row__main">
-                <i className="task-row__avatar" aria-hidden="true">
-                  <ClipboardIcon />
-                </i>
-                <span className={`status-pill status-pill--${task.status}`}>
-                  {STATUS_LABEL[task.status] ?? task.status}
-                </span>
-                <div className="task-row__body">
-                  <p className="task-row__description">{task.description}</p>
-                  <p className={`muted task-row__meta${isOverdue(task) ? ' task-row__meta--overdue' : ''}`}>
-                    {formatDeadline(task.deadlineAt)}
-                  </p>
+          {filteredTasks.map((task) => {
+            const bucket = taskBucket(task);
+            return (
+              <li key={task.id} className="task-row" data-testid="task-row">
+                <div className="task-row__main">
+                  <i className="task-row__avatar" aria-hidden="true">
+                    <ClipboardIcon />
+                  </i>
+                  <span className={`status-pill status-pill--${bucket}`}>{BUCKET_LABEL[bucket]}</span>
+                  <span className="task-row__stages" aria-hidden="true">
+                    {task.stages.map((stage) => {
+                      const state = stageVisualState(stage);
+                      return (
+                        <span
+                          key={stage.id}
+                          className={`task-row__stage-dot${state !== 'pending' ? ` task-row__stage-dot--${state}` : ''}`}
+                        />
+                      );
+                    })}
+                  </span>
+                  <div className="task-row__body">
+                    <p className="task-row__description">{task.description}</p>
+                    <p className="muted task-row__meta">{currentStageLabel(task)}</p>
+                    <p className={`muted task-row__meta${isOverdue(task) ? ' task-row__meta--overdue' : ''}`}>
+                      {formatDeadline(task.deadlineAt)}
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div className="task-actions">
-                {task.status === 'new' && (
+                <div className="task-actions">
                   <AssignForm
                     taskId={task.id}
                     memberships={memberships}
-                    pending={pendingId === task.id}
+                    pending={pendingId === task.id || Boolean(task.rejectedAt)}
                     onAssign={(assigneeMembershipId) =>
                       runAction(task.id, `workshop-tasks/${task.id}/assign`, 'PATCH', { assigneeMembershipId })
                     }
                   />
-                )}
-                {task.status === 'assigned' && (
-                  <button
-                    type="button"
-                    className="task-decision task-decision--accept"
-                    disabled={pendingId === task.id}
-                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/accept`, 'POST')}
-                  >
-                    <span className="task-decision__icon">
-                      <CheckIcon />
-                    </span>
-                    <span className="task-decision__label">Принять</span>
-                  </button>
-                )}
-                {task.status === 'accepted' && (
-                  <button
-                    type="button"
-                    className="task-decision task-decision--accept"
-                    disabled={pendingId === task.id}
-                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/complete`, 'POST')}
-                  >
-                    <span className="task-decision__icon">
-                      <CheckIcon />
-                    </span>
-                    <span className="task-decision__label">Выполнено</span>
-                  </button>
-                )}
-                {task.status === 'completed' && (
-                  <button
-                    type="button"
-                    className="task-decision task-decision--accept"
-                    disabled={pendingId === task.id}
-                    onClick={() => runAction(task.id, `workshop-tasks/${task.id}/close`, 'POST')}
-                  >
-                    <span className="task-decision__icon">
-                      <CheckIcon />
-                    </span>
-                    <span className="task-decision__label">Закрыть</span>
-                  </button>
-                )}
-                {task.status !== 'closed' && (
-                  <button
-                    type="button"
-                    className="btn-pill btn-pill--ghost"
-                    onClick={() => setRescheduleOpenId(rescheduleOpenId === task.id ? null : task.id)}
-                  >
-                    Перенести срок
-                  </button>
-                )}
-              </div>
+                  {!task.rejectedAt && (
+                    <TaskDecisionButtons
+                      disabled={pendingId === task.id}
+                      canRevert={canRevertTask(task)}
+                      onAdvance={() => runAction(task.id, `workshop-tasks/${task.id}/advance`, 'POST')}
+                      onRevert={() => runAction(task.id, `workshop-tasks/${task.id}/revert`, 'POST')}
+                      onReject={() => runAction(task.id, `workshop-tasks/${task.id}/reject`, 'POST')}
+                    />
+                  )}
+                  {!task.rejectedAt && !task.completedAt && (
+                    <button
+                      type="button"
+                      className="btn-pill btn-pill--ghost"
+                      onClick={() => setRescheduleOpenId(rescheduleOpenId === task.id ? null : task.id)}
+                    >
+                      Перенести срок
+                    </button>
+                  )}
+                </div>
 
-              {rescheduleOpenId === task.id && (
-                <RescheduleForm
-                  pending={pendingId === task.id}
-                  onSubmit={(deadlineAt, reason) =>
-                    runAction(task.id, `workshop-tasks/${task.id}/deadline`, 'PATCH', { deadlineAt, reason })
-                  }
-                />
-              )}
+                {rescheduleOpenId === task.id && (
+                  <RescheduleForm
+                    pending={pendingId === task.id}
+                    onSubmit={(deadlineAt, reason) =>
+                      runAction(task.id, `workshop-tasks/${task.id}/deadline`, 'PATCH', { deadlineAt, reason })
+                    }
+                  />
+                )}
 
-              {errors[task.id] && (
-                <p role="alert" className="task-row__error">
-                  {errors[task.id]}
-                </p>
-              )}
-            </li>
-          ))}
+                {errors[task.id] && (
+                  <p role="alert" className="task-row__error">
+                    {errors[task.id]}
+                  </p>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </>

@@ -66,16 +66,22 @@ import {
 } from '@kulisa/db/workshop-repository';
 import {
   WorkshopTaskAfterTaskNotFoundError,
+  WorkshopTaskAlreadyCompletedError,
   WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
+  WorkshopTaskAlreadyRejectedError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
-  WorkshopTaskClosedError,
   WorkshopTaskGraphNodeNotFoundError,
   WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
+  WorkshopTaskNoActiveStageError,
+  WorkshopTaskNoPrecedingStageError,
+  WorkshopTaskNotClassicError,
   WorkshopTaskProductionNotFoundError,
+  WorkshopTaskRejectedError,
+  WorkshopTaskStageNotFoundError,
   WorkshopTaskWorkshopNotFoundError,
   type CreateTaskForGraphNodeInput,
   type CreateTaskForWorkshopInput,
@@ -83,6 +89,7 @@ import {
   type StoredTaskAssignee,
   type StoredWorkshopTask,
   type StoredWorkshopTaskWithAssignees,
+  type StoredWorkshopTaskWithStages,
   type TaskLeadDecision,
 } from '@kulisa/db/workshop-task-repository';
 import {
@@ -236,20 +243,35 @@ export interface WorkshopTaskRepository {
   createTaskFromBudgetItem(
     context: TenantContext,
     input: CreateTaskFromBudgetItemInput,
-  ): Promise<StoredWorkshopTask>;
-  listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]>;
-  listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTask[]>;
-  createTaskForWorkshop(context: TenantContext, input: CreateTaskForWorkshopInput): Promise<StoredWorkshopTask>;
-  assignTask(context: TenantContext, taskId: string, assigneeMembershipId: string): Promise<StoredWorkshopTask | null>;
-  acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
-  completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
-  closeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null>;
+  ): Promise<StoredWorkshopTaskWithStages>;
+  listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTaskWithStages[]>;
+  listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTaskWithStages[]>;
+  createTaskForWorkshop(context: TenantContext, input: CreateTaskForWorkshopInput): Promise<StoredWorkshopTaskWithStages>;
+  assignTask(
+    context: TenantContext,
+    taskId: string,
+    assigneeMembershipId: string,
+  ): Promise<StoredWorkshopTaskWithStages | null>;
+  addTaskStage(
+    context: TenantContext,
+    taskId: string,
+    input: { label: string; afterStageId?: string },
+  ): Promise<StoredWorkshopTaskWithStages | null>;
+  editTaskStage(
+    context: TenantContext,
+    taskId: string,
+    stageId: string,
+    input: { label: string },
+  ): Promise<StoredWorkshopTaskWithStages | null>;
+  advanceTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null>;
+  revertTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null>;
+  rejectTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null>;
   rescheduleTaskDeadline(
     context: TenantContext,
     taskId: string,
     newDeadlineAt: string | null,
     reason: string,
-  ): Promise<StoredWorkshopTask | null>;
+  ): Promise<StoredWorkshopTaskWithStages | null>;
   createTaskForGraphNode(
     context: TenantContext,
     graphNodeId: string,
@@ -688,7 +710,7 @@ class HealthController {
   public async listWorkshopTasks(
     @Req() request: FastifyRequest,
     @Param('workshopId') workshopId: string,
-  ): Promise<StoredWorkshopTask[]> {
+  ): Promise<StoredWorkshopTaskWithStages[]> {
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
@@ -702,7 +724,7 @@ class HealthController {
   public async listProductionWorkshopTasks(
     @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
-  ): Promise<StoredWorkshopTask[]> {
+  ): Promise<StoredWorkshopTaskWithStages[]> {
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
@@ -717,7 +739,7 @@ class HealthController {
     @Req() request: FastifyRequest,
     @Param('productionId') productionId: string,
     @Body() body: unknown,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const input = readCreateWorkshopTaskInput(body);
     if (!input) throw new BadRequestException('Invalid task payload');
 
@@ -746,7 +768,7 @@ class HealthController {
     @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
     @Body() body: unknown,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const assigneeMembershipId = readAssigneeMembershipId(body);
     if (!assigneeMembershipId) throw new BadRequestException('Invalid task payload');
 
@@ -765,12 +787,15 @@ class HealthController {
     }
   }
 
-  @Post('v1/workshop-tasks/:taskId/accept')
-  @HttpCode(HttpStatus.OK)
-  public async acceptWorkshopTask(
+  @Post('v1/workshop-tasks/:taskId/stages')
+  public async addWorkshopTaskStage(
     @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
-  ): Promise<StoredWorkshopTask> {
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTaskWithStages> {
+    const input = readAddTaskStageInput(body);
+    if (!input) throw new BadRequestException('Invalid stage payload');
+
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
@@ -778,7 +803,7 @@ class HealthController {
     if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
 
     try {
-      const task = await this.workshopTaskRepository.acceptTask(context, taskId);
+      const task = await this.workshopTaskRepository.addTaskStage(context, taskId, input);
       if (!task) throw new NotFoundException();
       return task;
     } catch (error) {
@@ -786,20 +811,24 @@ class HealthController {
     }
   }
 
-  @Post('v1/workshop-tasks/:taskId/complete')
-  @HttpCode(HttpStatus.OK)
-  public async completeWorkshopTask(
+  @Patch('v1/workshop-tasks/:taskId/stages/:stageId')
+  public async editWorkshopTaskStage(
     @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
-  ): Promise<StoredWorkshopTask> {
+    @Param('stageId') stageId: string,
+    @Body() body: unknown,
+  ): Promise<StoredWorkshopTaskWithStages> {
+    const input = readEditTaskStageInput(body);
+    if (!input) throw new BadRequestException('Invalid stage payload');
+
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
     }
-    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+    if (!UUID_PATTERN.test(taskId) || !UUID_PATTERN.test(stageId)) throw new NotFoundException();
 
     try {
-      const task = await this.workshopTaskRepository.completeTask(context, taskId);
+      const task = await this.workshopTaskRepository.editTaskStage(context, taskId, stageId, input);
       if (!task) throw new NotFoundException();
       return task;
     } catch (error) {
@@ -807,12 +836,12 @@ class HealthController {
     }
   }
 
-  @Post('v1/workshop-tasks/:taskId/close')
+  @Post('v1/workshop-tasks/:taskId/advance')
   @HttpCode(HttpStatus.OK)
-  public async closeWorkshopTask(
+  public async advanceWorkshopTask(
     @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const context = await this.requirePlatformAdmin(request);
     if (!this.workshopTaskRepository) {
       throw new ServiceUnavailableException('Workshop task service is not configured');
@@ -820,7 +849,49 @@ class HealthController {
     if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
 
     try {
-      const task = await this.workshopTaskRepository.closeTask(context, taskId);
+      const task = await this.workshopTaskRepository.advanceTask(context, taskId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/revert')
+  @HttpCode(HttpStatus.OK)
+  public async revertWorkshopTask(
+    @Req() request: FastifyRequest,
+    @Param('taskId') taskId: string,
+  ): Promise<StoredWorkshopTaskWithStages> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.revertTask(context, taskId);
+      if (!task) throw new NotFoundException();
+      return task;
+    } catch (error) {
+      throw this.mapTaskTransitionError(error);
+    }
+  }
+
+  @Post('v1/workshop-tasks/:taskId/reject')
+  @HttpCode(HttpStatus.OK)
+  public async rejectWorkshopTask(
+    @Req() request: FastifyRequest,
+    @Param('taskId') taskId: string,
+  ): Promise<StoredWorkshopTaskWithStages> {
+    const context = await this.requirePlatformAdmin(request);
+    if (!this.workshopTaskRepository) {
+      throw new ServiceUnavailableException('Workshop task service is not configured');
+    }
+    if (!UUID_PATTERN.test(taskId)) throw new NotFoundException();
+
+    try {
+      const task = await this.workshopTaskRepository.rejectTask(context, taskId);
       if (!task) throw new NotFoundException();
       return task;
     } catch (error) {
@@ -833,7 +904,7 @@ class HealthController {
     @Req() request: FastifyRequest,
     @Param('taskId') taskId: string,
     @Body() body: unknown,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const input = readRescheduleInput(body);
     if (!input) throw new BadRequestException('Invalid reschedule payload');
 
@@ -947,8 +1018,23 @@ class HealthController {
     if (error instanceof WorkshopTaskAssigneeNotFoundError) {
       return new BadRequestException('Assignee not found in tenant');
     }
-    if (error instanceof WorkshopTaskClosedError) {
-      return new ConflictException('Task is closed and cannot be modified');
+    if (error instanceof WorkshopTaskRejectedError) {
+      return new ConflictException('Task is rejected and cannot be modified');
+    }
+    if (error instanceof WorkshopTaskAlreadyRejectedError) {
+      return new ConflictException('Task is already rejected');
+    }
+    if (error instanceof WorkshopTaskAlreadyCompletedError) {
+      return new ConflictException('Task has already completed every stage');
+    }
+    if (error instanceof WorkshopTaskNoActiveStageError) {
+      return new ConflictException('Task has no stage currently in progress');
+    }
+    if (error instanceof WorkshopTaskNoPrecedingStageError) {
+      return new ConflictException('Task has no earlier stage to revert to');
+    }
+    if (error instanceof WorkshopTaskNotClassicError) {
+      return new BadRequestException('Task belongs to a graph node and has no stages');
     }
     if (error instanceof WorkshopTaskAlreadyDecidedError) {
       return new ConflictException('Task already has a lead decision');
@@ -961,6 +1047,9 @@ class HealthController {
     }
     if (error instanceof WorkshopTaskAfterTaskNotFoundError) {
       return new BadRequestException('Task to insert after not found on this graph node');
+    }
+    if (error instanceof WorkshopTaskStageNotFoundError) {
+      return new BadRequestException('Task stage not found on this task');
     }
     if (error instanceof NotFoundException) return error;
     return error instanceof Error ? error : new Error(String(error));
@@ -1811,6 +1900,25 @@ function readCreateTaskInput(body: unknown): {
 function readAssigneeMembershipId(body: unknown): string | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   return readOptionalUuid((body as Record<string, unknown>).assigneeMembershipId) ?? null;
+}
+
+function readAddTaskStageInput(body: unknown): { label: string; afterStageId?: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const input = body as Record<string, unknown>;
+  const label = normalizeString(input.label, 200);
+  if (!label) return null;
+
+  const afterStageId = readOptionalUuid(input.afterStageId);
+  if (afterStageId === null) return null;
+
+  return { label, ...(afterStageId ? { afterStageId } : {}) };
+}
+
+function readEditTaskStageInput(body: unknown): { label: string } | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const label = normalizeString((body as Record<string, unknown>).label, 200);
+  if (!label) return null;
+  return { label };
 }
 
 function readRescheduleInput(body: unknown): { deadlineAt: string | null; reason: string } | null {

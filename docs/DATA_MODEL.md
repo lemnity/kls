@@ -2,7 +2,7 @@
 Tenant, User, Membership, Role, Permission, OrgUnit, EmployeeProfile
 Production, ProductionStage, StageCard, StageChecklistItem, ProductionHealthEvent
 Budget, BudgetVersion, BudgetSection, BudgetItem, BudgetTemplate, BudgetGraphNode, BudgetGraphEdge, BudgetAlternative
-Workshop, WorkshopTask, TaskDeadlineChange
+Workshop, WorkshopTask, TaskStage, TaskDeadlineChange
 Approval, ApprovalStep, ApprovalDecision
 Contract, Act, AccountingHandoff
 Passport, PassportEntry, FileAsset, MediaAsset

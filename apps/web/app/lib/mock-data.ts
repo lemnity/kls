@@ -36,6 +36,15 @@ export interface Budget {
   createdAt: string;
 }
 
+export interface TaskStage {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'done';
+  sortOrder: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 export interface WorkshopTask {
   id: string;
   workshopId: string;
@@ -45,6 +54,8 @@ export interface WorkshopTask {
   startAt: string | null;
   deadlineAt: string | null;
   completedAt: string | null;
+  rejectedAt: string | null;
+  stages: TaskStage[];
 }
 
 export interface Membership {

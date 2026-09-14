@@ -27,6 +27,7 @@ model Tenant {
   workshopTasks WorkshopTask[]
   taskDeadlineChanges TaskDeadlineChange[]
   taskAssignees TaskAssignee[]
+  taskStages TaskStage[]
   nodeAttachments NodeAttachment[]
   budgetTemplates BudgetTemplate[]
 
@@ -308,6 +309,10 @@ model WorkshopTask {
   startAt              DateTime?   @map("start_at")
   deadlineAt           DateTime?   @map("deadline_at")
   completedAt          DateTime?   @map("completed_at")
+  /** Classic (single-assignee) tasks only — terminal rejection, independent
+      of stage progress. Graph-node tasks use their own `status` value
+      ('rejected') instead and never set this. */
+  rejectedAt           DateTime?   @map("rejected_at")
   /** Fractional-index position among a graph node's tasks ("этапы") — lets a
       new task be inserted after any existing one (new midpoint value)
       without renumbering the rest. Not used by classic budget-item tasks. */
@@ -322,6 +327,7 @@ model WorkshopTask {
   assignee             Membership? @relation("WorkshopTaskAssignee", fields: [tenantId, assigneeMembershipId], references: [tenantId, id], onDelete: Restrict)
   deadlineChanges      TaskDeadlineChange[]
   assignees            TaskAssignee[]
+  stages               TaskStage[]
 
   @@unique([tenantId, id])
   @@unique([tenantId, budgetItemId])
@@ -349,6 +355,32 @@ model TaskAssignee {
   @@unique([tenantId, taskId, membershipId])
   @@index([tenantId, taskId])
   @@map("task_assignees")
+}
+
+/** One ordered step of a classic (single-assignee) WorkshopTask's lifecycle
+    ("этап"). Every classic task is seeded with 5 default stages at
+    creation (Новая/Назначена/Принята/Выполнена/Закрыта); users may add or
+    rename stages beyond those. `sortOrder` uses the same fractional-index
+    scheme as `WorkshopTask.sortOrder` for the graph-node system, so a new
+    stage can be inserted between two existing ones without renumbering.
+    Graph-node tasks never have TaskStage rows. */
+model TaskStage {
+  id          String       @id @default(uuid()) @db.Uuid
+  tenantId    String       @map("tenant_id") @db.Uuid
+  taskId      String       @map("task_id") @db.Uuid
+  label       String       @db.VarChar(200)
+  status      String       @default("pending") @db.VarChar(20)
+  sortOrder   Decimal      @map("sort_order") @db.Decimal(30, 10)
+  startedAt   DateTime?    @map("started_at")
+  completedAt DateTime?    @map("completed_at")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  task        WorkshopTask @relation(fields: [tenantId, taskId], references: [tenantId, id], onDelete: Restrict)
+
+  @@unique([tenantId, id])
+  @@index([tenantId, taskId, sortOrder])
+  @@map("task_stages")
 }
 
 model NodeAttachment {

@@ -108,6 +108,27 @@ export function BellIcon({ className }: IconProps) {
   );
 }
 
+export function MessageIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <path d="M4 6.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H9l-4.2 3.2a.5.5 0 0 1-.8-.4v-2.8H6a2 2 0 0 1-2-2Z" />
+      <line x1="7.5" y1="8.5" x2="16.5" y2="8.5" />
+      <line x1="7.5" y1="12" x2="13.5" y2="12" />
+    </svg>
+  );
+}
+
+export function TimerIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <circle cx="12" cy="13" r="8" />
+      <path d="M12 9v4l2.6 2.6" />
+      <path d="M9.5 3h5" />
+      <path d="M12 3v2.2" />
+    </svg>
+  );
+}
+
 export function LayersIcon({ className }: IconProps) {
   return (
     <svg {...BASE_PROPS} className={className}>
@@ -234,6 +255,27 @@ export function UndoIcon({ className }: IconProps) {
     <svg {...BASE_PROPS} className={className} strokeWidth={2}>
       <path d="M6 8 3 11l3 3" />
       <path d="M3 11h11a5.5 5.5 0 1 1 0 11H9" />
+    </svg>
+  );
+}
+
+export function TableIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <line x1="3.5" y1="9.7" x2="20.5" y2="9.7" />
+      <line x1="3.5" y1="14.9" x2="20.5" y2="14.9" />
+      <line x1="12" y1="4.5" x2="12" y2="19.5" />
+    </svg>
+  );
+}
+
+export function PackageIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <path d="M12 3.2 20 7.6v8.8L12 20.8 4 16.4V7.6L12 3.2Z" />
+      <path d="M4 7.6 12 12l8-4.4" />
+      <line x1="12" y1="12" x2="12" y2="20.8" />
     </svg>
   );
 }

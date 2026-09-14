@@ -5,7 +5,20 @@ import type { Client } from 'pg';
 
 type SqlClient = Pick<Client, 'query'>;
 
+// Graph-node task creation only — DO NOT reuse for classic tasks (see
+// DEFAULT_CLASSIC_TASK_STATUS below). Sharing this constant's *value*
+// between the two systems would silently break the untouched graph-node
+// lead-decision flow, which requires a fresh task to start at 'new'.
 const DEFAULT_TASK_STATUS = 'new';
+
+// Classic (single-assignee) task creation only. Classic tasks no longer
+// use the old 5-value status vocabulary — see TaskStage for the actual
+// step-by-step progress, tracked in its own table.
+const DEFAULT_CLASSIC_TASK_STATUS = 'active';
+
+// Seeded onto every newly-created classic task, in order. Users may add
+// further stages beyond these five, or rename any of them.
+const DEFAULT_TASK_STAGE_LABELS = ['Новая', 'Назначена', 'Принята', 'Выполнена', 'Закрыта'] as const;
 
 export interface StoredWorkshopTask {
   id: string;
@@ -20,6 +33,28 @@ export interface StoredWorkshopTask {
   startAt: string | null;
   deadlineAt: string | null;
   completedAt: string | null;
+  /** Classic tasks only — terminal rejection, independent of stage
+      progress. Always null for graph-node tasks (which use their own
+      `status` value 'rejected' instead). */
+  rejectedAt: string | null;
+}
+
+export type TaskStageStatus = 'pending' | 'in_progress' | 'done';
+
+/** One ordered step ("этап") of a classic task's lifecycle. Graph-node
+    tasks never have any TaskStage rows. */
+export interface StoredTaskStage {
+  id: string;
+  taskId: string;
+  label: string;
+  status: TaskStageStatus;
+  sortOrder: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface StoredWorkshopTaskWithStages extends StoredWorkshopTask {
+  stages: StoredTaskStage[];
 }
 
 export interface CreateTaskFromBudgetItemInput {
@@ -109,10 +144,64 @@ export class WorkshopTaskInvalidTransitionError extends Error {
   }
 }
 
-export class WorkshopTaskClosedError extends Error {
+/** Classic tasks only — the task has been rejected (terminal) and cannot
+    be assigned, rescheduled, advanced, reverted, or have its stages
+    edited. Replaces the old WorkshopTaskClosedError, whose only guard
+    (`status === 'closed'`) became permanently unreachable once classic
+    tasks stopped using that status value — this is its direct successor,
+    not an addition alongside it. */
+export class WorkshopTaskRejectedError extends Error {
   public constructor(public readonly taskId: string) {
-    super(`Task ${taskId} is closed and cannot be modified`);
-    this.name = 'WorkshopTaskClosedError';
+    super(`Task ${taskId} is rejected and cannot be modified`);
+    this.name = 'WorkshopTaskRejectedError';
+  }
+}
+
+export class WorkshopTaskAlreadyRejectedError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} is already rejected`);
+    this.name = 'WorkshopTaskAlreadyRejectedError';
+  }
+}
+
+/** advanceTask called after every stage is already done. */
+export class WorkshopTaskAlreadyCompletedError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} has already completed every stage`);
+    this.name = 'WorkshopTaskAlreadyCompletedError';
+  }
+}
+
+export class WorkshopTaskNoActiveStageError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} has no stage currently in progress`);
+    this.name = 'WorkshopTaskNoActiveStageError';
+  }
+}
+
+/** revertTask called with nothing earlier to revert to — already at the first stage. */
+export class WorkshopTaskNoPrecedingStageError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} has no earlier stage to revert to`);
+    this.name = 'WorkshopTaskNoPrecedingStageError';
+  }
+}
+
+export class WorkshopTaskStageNotFoundError extends Error {
+  public constructor(public readonly stageId: string) {
+    super(`Task stage ${stageId} not found on this task`);
+    this.name = 'WorkshopTaskStageNotFoundError';
+  }
+}
+
+/** Defense-in-depth: the stage endpoints (add/edit/advance/revert/reject)
+    only make sense for classic tasks. No current UI path calls them with
+    a graph-node task id, but they should refuse rather than silently
+    operate on one if that ever happens. */
+export class WorkshopTaskNotClassicError extends Error {
+  public constructor(public readonly taskId: string) {
+    super(`Task ${taskId} belongs to a graph node and has no stages`);
+    this.name = 'WorkshopTaskNotClassicError';
   }
 }
 
@@ -152,14 +241,16 @@ export class WorkshopTaskProductionNotFoundError extends Error {
 }
 
 const TASK_RAW_COLUMNS = `id, budget_item_id, graph_node_id, production_id, workshop_id,
-           assignee_membership_id, status, description, planned_amount, start_at, deadline_at, completed_at`;
+           assignee_membership_id, status, description, planned_amount, start_at, deadline_at, completed_at,
+           rejected_at`;
 const TASK_COLUMNS = `id, budget_item_id AS "budgetItemId", graph_node_id AS "graphNodeId",
            production_id AS "productionId", workshop_id AS "workshopId",
            assignee_membership_id AS "assigneeMembershipId",
            status, description, planned_amount AS "plannedAmount",
            to_char(start_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "startAt",
            to_char(deadline_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "deadlineAt",
-           to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "completedAt"`;
+           to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "completedAt",
+           to_char(rejected_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "rejectedAt"`;
 
 export class PostgresWorkshopTaskRepository {
   public constructor(private readonly client: SqlClient) {}
@@ -167,7 +258,7 @@ export class PostgresWorkshopTaskRepository {
   public async createTaskFromBudgetItem(
     context: TenantContext,
     input: CreateTaskFromBudgetItemInput,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const lookup = await this.client.query<{
       itemDescription: string;
       workshopId: string;
@@ -205,6 +296,8 @@ export class PostgresWorkshopTaskRepository {
 
     const taskId = randomUUID();
     const description = input.description ?? source.itemDescription;
+    const stageIds = DEFAULT_TASK_STAGE_LABELS.map(() => randomUUID());
+    const stageIndexes = DEFAULT_TASK_STAGE_LABELS.map((_, index) => index);
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH created AS (
          INSERT INTO workshop_tasks (
@@ -213,6 +306,11 @@ export class PostgresWorkshopTaskRepository {
          )
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, NOW())
          RETURNING ${TASK_RAW_COLUMNS}
+       ), stages_inserted AS (
+         INSERT INTO task_stages (id, tenant_id, task_id, label, status, sort_order, started_at, updated_at)
+         SELECT stage_id, $2, $1, label, CASE WHEN idx = 0 THEN 'in_progress' ELSE 'pending' END,
+                idx + 1, CASE WHEN idx = 0 THEN NOW() ELSE NULL END, NOW()
+         FROM unnest($12::uuid[], $13::text[], $14::int[]) AS s(stage_id, label, idx)
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
          SELECT $10, $2, $11, 'workshop_task.created', 'workshop_task', id,
@@ -227,18 +325,21 @@ export class PostgresWorkshopTaskRepository {
         source.productionId,
         source.workshopId,
         input.assigneeMembershipId ?? null,
-        DEFAULT_TASK_STATUS,
+        DEFAULT_CLASSIC_TASK_STATUS,
         description,
         input.deadlineAt ?? null,
         randomUUID(),
         context.membershipId,
+        stageIds,
+        DEFAULT_TASK_STAGE_LABELS,
+        stageIndexes,
       ],
     );
 
-    return result.rows[0]!;
+    return this.attachStages(context, result.rows[0]!);
   }
 
-  public async listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTask[]> {
+  public async listTasksByWorkshop(context: TenantContext, workshopId: string): Promise<StoredWorkshopTaskWithStages[]> {
     const result = await this.client.query<StoredWorkshopTask>(
       `SELECT ${TASK_COLUMNS}
        FROM workshop_tasks
@@ -247,11 +348,11 @@ export class PostgresWorkshopTaskRepository {
       [context.tenantId, workshopId],
     );
 
-    return result.rows;
+    return this.attachStagesBatch(context, result.rows);
   }
 
   /** For the "Смета" Gantt board — every task across every workshop of one production. */
-  public async listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTask[]> {
+  public async listTasksByProduction(context: TenantContext, productionId: string): Promise<StoredWorkshopTaskWithStages[]> {
     const result = await this.client.query<StoredWorkshopTask>(
       `SELECT ${TASK_COLUMNS}
        FROM workshop_tasks
@@ -260,7 +361,61 @@ export class PostgresWorkshopTaskRepository {
       [context.tenantId, productionId],
     );
 
+    return this.attachStagesBatch(context, result.rows);
+  }
+
+  private async listTaskStages(context: TenantContext, taskId: string): Promise<StoredTaskStage[]> {
+    const result = await this.client.query<StoredTaskStage>(
+      `SELECT id, task_id AS "taskId", label, status, sort_order AS "sortOrder",
+              to_char(started_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "startedAt",
+              to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "completedAt"
+       FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2
+       ORDER BY sort_order ASC`,
+      [context.tenantId, taskId],
+    );
     return result.rows;
+  }
+
+  private async attachStages(context: TenantContext, task: StoredWorkshopTask): Promise<StoredWorkshopTaskWithStages> {
+    return { ...task, stages: await this.listTaskStages(context, task.id) };
+  }
+
+  /** Batched equivalent of attachStages, for list endpoints — mirrors how
+      listGraphNodeTasks batches its own assignees rather than querying
+      per row. Graph-node tasks (never seeded any TaskStage rows) simply
+      come back with `stages: []`. */
+  private async attachStagesBatch(
+    context: TenantContext,
+    tasks: StoredWorkshopTask[],
+  ): Promise<StoredWorkshopTaskWithStages[]> {
+    if (tasks.length === 0) return [];
+
+    const stages = await this.client.query<{ taskId: string } & StoredTaskStage>(
+      `SELECT task_id AS "taskId", id, label, status, sort_order AS "sortOrder",
+              to_char(started_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "startedAt",
+              to_char(completed_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "completedAt"
+       FROM task_stages
+       WHERE tenant_id = $1 AND task_id = ANY($2::uuid[])
+       ORDER BY sort_order ASC`,
+      [context.tenantId, tasks.map((task) => task.id)],
+    );
+    const byTask = new Map<string, StoredTaskStage[]>();
+    for (const row of stages.rows) {
+      const list = byTask.get(row.taskId) ?? [];
+      list.push({
+        id: row.id,
+        taskId: row.taskId,
+        label: row.label,
+        status: row.status,
+        sortOrder: row.sortOrder,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+      });
+      byTask.set(row.taskId, list);
+    }
+
+    return tasks.map((task) => ({ ...task, stages: byTask.get(task.id) ?? [] }));
   }
 
   /**
@@ -272,7 +427,7 @@ export class PostgresWorkshopTaskRepository {
   public async createTaskForWorkshop(
     context: TenantContext,
     input: CreateTaskForWorkshopInput,
-  ): Promise<StoredWorkshopTask> {
+  ): Promise<StoredWorkshopTaskWithStages> {
     const production = await this.client.query(
       'SELECT 1 FROM productions WHERE id = $1 AND tenant_id = $2',
       [input.productionId, context.tenantId],
@@ -296,6 +451,8 @@ export class PostgresWorkshopTaskRepository {
     }
 
     const taskId = randomUUID();
+    const stageIds = DEFAULT_TASK_STAGE_LABELS.map(() => randomUUID());
+    const stageIndexes = DEFAULT_TASK_STAGE_LABELS.map((_, index) => index);
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH created AS (
          INSERT INTO workshop_tasks (
@@ -304,6 +461,11 @@ export class PostgresWorkshopTaskRepository {
          )
          VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, NULL, $8::timestamptz, $9::timestamptz, NOW())
          RETURNING ${TASK_RAW_COLUMNS}
+       ), stages_inserted AS (
+         INSERT INTO task_stages (id, tenant_id, task_id, label, status, sort_order, started_at, updated_at)
+         SELECT stage_id, $2, $1, label, CASE WHEN idx = 0 THEN 'in_progress' ELSE 'pending' END,
+                idx + 1, CASE WHEN idx = 0 THEN NOW() ELSE NULL END, NOW()
+         FROM unnest($12::uuid[], $13::text[], $14::int[]) AS s(stage_id, label, idx)
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
          SELECT $10, $2, $11, 'workshop_task.created', 'workshop_task', id,
@@ -317,16 +479,19 @@ export class PostgresWorkshopTaskRepository {
         input.productionId,
         input.workshopId,
         input.assigneeMembershipId ?? null,
-        DEFAULT_TASK_STATUS,
+        DEFAULT_CLASSIC_TASK_STATUS,
         input.description,
         input.startAt ?? input.deadlineAt,
         input.deadlineAt,
         randomUUID(),
         context.membershipId,
+        stageIds,
+        DEFAULT_TASK_STAGE_LABELS,
+        stageIndexes,
       ],
     );
 
-    return result.rows[0]!;
+    return this.attachStages(context, result.rows[0]!);
   }
 
   /**
@@ -453,6 +618,68 @@ export class PostgresWorkshopTaskRepository {
     return computed.rows[0]!.value;
   }
 
+  /**
+   * Fractional-index position for a new task stage ("этап") — same
+   * midpoint-insertion scheme as resolveGraphNodeTaskSortOrder above,
+   * scoped to one classic task's stages instead of one graph node's tasks.
+   */
+  private async resolveTaskStageSortOrder(
+    context: TenantContext,
+    taskId: string,
+    afterStageId: string | undefined,
+  ): Promise<string> {
+    if (!afterStageId) {
+      const appended = await this.client.query<{ next: string }>(
+        `SELECT (COALESCE(MAX(sort_order), 0) + 1)::text AS next
+         FROM task_stages WHERE tenant_id = $1 AND task_id = $2`,
+        [context.tenantId, taskId],
+      );
+      return appended.rows[0]!.next;
+    }
+
+    const after = await this.client.query<{ sortOrder: string }>(
+      `SELECT sort_order AS "sortOrder" FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND id = $3`,
+      [context.tenantId, taskId, afterStageId],
+    );
+    const afterRow = after.rows[0];
+    if (!afterRow) throw new WorkshopTaskStageNotFoundError(afterStageId);
+
+    const next = await this.client.query<{ sortOrder: string }>(
+      `SELECT sort_order AS "sortOrder" FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND sort_order > $3::numeric
+       ORDER BY sort_order ASC LIMIT 1`,
+      [context.tenantId, taskId, afterRow.sortOrder],
+    );
+    const nextRow = next.rows[0];
+
+    const computed = await this.client.query<{ value: string }>(
+      nextRow
+        ? `SELECT (($1::numeric + $2::numeric) / 2)::text AS value`
+        : `SELECT ($1::numeric + 1)::text AS value`,
+      nextRow ? [afterRow.sortOrder, nextRow.sortOrder] : [afterRow.sortOrder],
+    );
+    return computed.rows[0]!.value;
+  }
+
+  /** Guard shared by every stage endpoint (add/edit/advance/revert/reject)
+      — none of them make sense for a graph-node task. Returns null if the
+      task doesn't exist in this tenant at all. */
+  private async requireClassicTask(
+    context: TenantContext,
+    taskId: string,
+  ): Promise<{ graphNodeId: string | null; rejectedAt: string | null; completedAt: string | null } | null> {
+    const result = await this.client.query<{ graphNodeId: string | null; rejectedAt: string | null; completedAt: string | null }>(
+      `SELECT graph_node_id AS "graphNodeId", rejected_at AS "rejectedAt", completed_at AS "completedAt"
+       FROM workshop_tasks WHERE id = $1 AND tenant_id = $2`,
+      [taskId, context.tenantId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    if (row.graphNodeId !== null) throw new WorkshopTaskNotClassicError(taskId);
+    return row;
+  }
+
   public async listGraphNodeTasks(
     context: TenantContext,
     graphNodeId: string,
@@ -570,9 +797,18 @@ export class PostgresWorkshopTaskRepository {
     context: TenantContext,
     taskId: string,
     assigneeMembershipId: string,
-  ): Promise<StoredWorkshopTask | null> {
-    const current = await this.requireCurrentStatus(context, taskId, 'new');
-    if (current === null) return null;
+  ): Promise<StoredWorkshopTaskWithStages | null> {
+    // Deliberately NOT requireClassicTask here — assign has always worked
+    // on graph-node tasks too (a pre-existing, accepted latent gap; see
+    // plan §"Gaps you should decide on" item 3) and reassigning is no
+    // longer gated on a specific status, only on not being rejected.
+    const existing = await this.client.query<{ rejectedAt: string | null }>(
+      'SELECT rejected_at AS "rejectedAt" FROM workshop_tasks WHERE id = $1 AND tenant_id = $2',
+      [taskId, context.tenantId],
+    );
+    const current = existing.rows[0];
+    if (!current) return null;
+    if (current.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
 
     const assignee = await this.client.query(
       'SELECT 1 FROM memberships WHERE id = $1 AND tenant_id = $2',
@@ -583,7 +819,7 @@ export class PostgresWorkshopTaskRepository {
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH updated AS (
          UPDATE workshop_tasks
-         SET status = 'assigned', assignee_membership_id = $3, updated_at = NOW()
+         SET assignee_membership_id = $3, updated_at = NOW()
          WHERE id = $1 AND tenant_id = $2
          RETURNING ${TASK_RAW_COLUMNS}
        ), audited AS (
@@ -595,73 +831,253 @@ export class PostgresWorkshopTaskRepository {
       [taskId, context.tenantId, assigneeMembershipId, randomUUID(), context.membershipId],
     );
 
-    return result.rows[0]!;
+    return this.attachStages(context, result.rows[0]!);
   }
 
-  public async acceptTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
-    const current = await this.requireCurrentStatus(context, taskId, 'assigned');
-    if (current === null) return null;
+  /** "Принять" — the one in-progress stage is marked done and the next
+      stage (by sort order) becomes in-progress; reaching the end of the
+      list instead marks the whole task completed. */
+  public async advanceTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null> {
+    const info = await this.requireClassicTask(context, taskId);
+    if (info === null) return null;
+    if (info.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
+    if (info.completedAt !== null) throw new WorkshopTaskAlreadyCompletedError(taskId);
 
+    const active = await this.client.query<{ id: string; sortOrder: string }>(
+      `SELECT id, sort_order AS "sortOrder" FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND status = 'in_progress'`,
+      [context.tenantId, taskId],
+    );
+    const activeStage = active.rows[0];
+    if (!activeStage) throw new WorkshopTaskNoActiveStageError(taskId);
+
+    const next = await this.client.query<{ id: string }>(
+      `SELECT id FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND sort_order > $3::numeric
+       ORDER BY sort_order ASC LIMIT 1`,
+      [context.tenantId, taskId, activeStage.sortOrder],
+    );
+    const nextStage = next.rows[0];
+
+    await this.client.query(
+      `UPDATE task_stages SET status = 'done', completed_at = NOW(), updated_at = NOW()
+       WHERE id = $1 AND tenant_id = $2`,
+      [activeStage.id, context.tenantId],
+    );
+    if (nextStage) {
+      await this.client.query(
+        `UPDATE task_stages SET status = 'in_progress', started_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2`,
+        [nextStage.id, context.tenantId],
+      );
+    }
+
+    const taskCompletedAtSql = nextStage ? 'completed_at' : 'NOW()';
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH updated AS (
          UPDATE workshop_tasks
-         SET status = 'accepted', updated_at = NOW()
+         SET completed_at = ${taskCompletedAtSql}, updated_at = NOW()
          WHERE id = $1 AND tenant_id = $2
          RETURNING ${TASK_RAW_COLUMNS}
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
-         SELECT $3, $2, $4, 'workshop_task.accepted', 'workshop_task', id, '{}'::jsonb
+         SELECT $3, $2, $4, 'workshop_task.advanced', 'workshop_task', id,
+           jsonb_build_object('fromStageId', $5::uuid, 'toStageId', $6::uuid)
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, randomUUID(), context.membershipId, activeStage.id, nextStage ? nextStage.id : null],
+    );
+
+    return this.attachStages(context, result.rows[0]!);
+  }
+
+  /** "Вернуть в работу" — either un-finishes a fully-completed task (the
+      last stage goes back to in-progress) or, mid-flow, moves the
+      in-progress stage back to the nearest earlier done stage. */
+  public async revertTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null> {
+    const info = await this.requireClassicTask(context, taskId);
+    if (info === null) return null;
+    if (info.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
+
+    if (info.completedAt !== null) {
+      const last = await this.client.query<{ id: string }>(
+        `SELECT id FROM task_stages WHERE tenant_id = $1 AND task_id = $2
+         ORDER BY sort_order DESC LIMIT 1`,
+        [context.tenantId, taskId],
+      );
+      const lastStage = last.rows[0];
+      if (!lastStage) throw new WorkshopTaskNoActiveStageError(taskId);
+
+      await this.client.query(
+        `UPDATE task_stages SET status = 'in_progress', updated_at = NOW() WHERE id = $1 AND tenant_id = $2`,
+        [lastStage.id, context.tenantId],
+      );
+
+      const result = await this.client.query<StoredWorkshopTask>(
+        `WITH updated AS (
+           UPDATE workshop_tasks SET completed_at = NULL, updated_at = NOW()
+           WHERE id = $1 AND tenant_id = $2
+           RETURNING ${TASK_RAW_COLUMNS}
+         ), audited AS (
+           INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+           SELECT $3, $2, $4, 'workshop_task.reverted', 'workshop_task', id,
+             jsonb_build_object('toStageId', $5::uuid)
+           FROM updated
+         )
+         SELECT ${TASK_COLUMNS} FROM updated`,
+        [taskId, context.tenantId, randomUUID(), context.membershipId, lastStage.id],
+      );
+
+      return this.attachStages(context, result.rows[0]!);
+    }
+
+    const active = await this.client.query<{ id: string; sortOrder: string }>(
+      `SELECT id, sort_order AS "sortOrder" FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND status = 'in_progress'`,
+      [context.tenantId, taskId],
+    );
+    const activeStage = active.rows[0];
+    if (!activeStage) throw new WorkshopTaskNoActiveStageError(taskId);
+
+    const preceding = await this.client.query<{ id: string }>(
+      `SELECT id FROM task_stages
+       WHERE tenant_id = $1 AND task_id = $2 AND sort_order < $3::numeric AND status = 'done'
+       ORDER BY sort_order DESC LIMIT 1`,
+      [context.tenantId, taskId, activeStage.sortOrder],
+    );
+    const precedingStage = preceding.rows[0];
+    if (!precedingStage) throw new WorkshopTaskNoPrecedingStageError(taskId);
+
+    await this.client.query(
+      `UPDATE task_stages SET status = 'pending', started_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND tenant_id = $2`,
+      [activeStage.id, context.tenantId],
+    );
+    await this.client.query(
+      `UPDATE task_stages SET status = 'in_progress', completed_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND tenant_id = $2`,
+      [precedingStage.id, context.tenantId],
+    );
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks SET updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING ${TASK_RAW_COLUMNS}
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'workshop_task.reverted', 'workshop_task', id,
+           jsonb_build_object('fromStageId', $5::uuid, 'toStageId', $6::uuid)
+         FROM updated
+       )
+       SELECT ${TASK_COLUMNS} FROM updated`,
+      [taskId, context.tenantId, randomUUID(), context.membershipId, activeStage.id, precedingStage.id],
+    );
+
+    return this.attachStages(context, result.rows[0]!);
+  }
+
+  /** "Отклонить" — terminal, freezes stage progress as-is. No un-reject in v1. */
+  public async rejectTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTaskWithStages | null> {
+    const info = await this.requireClassicTask(context, taskId);
+    if (info === null) return null;
+    if (info.rejectedAt !== null) throw new WorkshopTaskAlreadyRejectedError(taskId);
+
+    const result = await this.client.query<StoredWorkshopTask>(
+      `WITH updated AS (
+         UPDATE workshop_tasks
+         SET status = 'rejected', rejected_at = NOW(), updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2
+         RETURNING ${TASK_RAW_COLUMNS}
+       ), audited AS (
+         INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
+         SELECT $3, $2, $4, 'workshop_task.rejected', 'workshop_task', id, '{}'::jsonb
          FROM updated
        )
        SELECT ${TASK_COLUMNS} FROM updated`,
       [taskId, context.tenantId, randomUUID(), context.membershipId],
     );
 
-    return result.rows[0]!;
+    return this.attachStages(context, result.rows[0]!);
   }
 
-  public async completeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
-    const current = await this.requireCurrentStatus(context, taskId, 'accepted');
-    if (current === null) return null;
+  /** "Добавить этап" — inserts a new custom stage, appended at the end by
+      default or at the midpoint after `afterStageId`. Starts 'pending'. */
+  public async addTaskStage(
+    context: TenantContext,
+    taskId: string,
+    input: { label: string; afterStageId?: string },
+  ): Promise<StoredWorkshopTaskWithStages | null> {
+    const info = await this.requireClassicTask(context, taskId);
+    if (info === null) return null;
+    if (info.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
 
-    const result = await this.client.query<StoredWorkshopTask>(
-      `WITH updated AS (
-         UPDATE workshop_tasks
-         SET status = 'completed', completed_at = NOW(), updated_at = NOW()
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING ${TASK_RAW_COLUMNS}
+    const sortOrder = await this.resolveTaskStageSortOrder(context, taskId, input.afterStageId);
+    const stageId = randomUUID();
+
+    await this.client.query(
+      `WITH inserted AS (
+         INSERT INTO task_stages (id, tenant_id, task_id, label, status, sort_order, updated_at)
+         VALUES ($1, $2, $3, $4, 'pending', $5::numeric, NOW())
+         RETURNING id
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
-         SELECT $3, $2, $4, 'workshop_task.completed', 'workshop_task', id, '{}'::jsonb
-         FROM updated
+         SELECT $6, $2, $7, 'workshop_task.stage_added', 'workshop_task', $3,
+           jsonb_build_object('stageId', $1, 'label', $4)
+         FROM inserted
        )
-       SELECT ${TASK_COLUMNS} FROM updated`,
-      [taskId, context.tenantId, randomUUID(), context.membershipId],
+       SELECT 1 FROM inserted`,
+      [stageId, context.tenantId, taskId, input.label, sortOrder, randomUUID(), context.membershipId],
     );
 
-    return result.rows[0]!;
+    const task = (await this.loadTask(context, taskId))!;
+    return this.attachStages(context, task);
   }
 
-  public async closeTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
-    const current = await this.requireCurrentStatus(context, taskId, 'completed');
-    if (current === null) return null;
+  /** "Редактировать этап" — rename only; no reordering in v1. */
+  public async editTaskStage(
+    context: TenantContext,
+    taskId: string,
+    stageId: string,
+    input: { label: string },
+  ): Promise<StoredWorkshopTaskWithStages | null> {
+    const info = await this.requireClassicTask(context, taskId);
+    if (info === null) return null;
+    if (info.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
 
-    const result = await this.client.query<StoredWorkshopTask>(
+    const existing = await this.client.query<{ label: string }>(
+      'SELECT label FROM task_stages WHERE id = $1 AND tenant_id = $2 AND task_id = $3',
+      [stageId, context.tenantId, taskId],
+    );
+    const previousStage = existing.rows[0];
+    if (!previousStage) throw new WorkshopTaskStageNotFoundError(stageId);
+
+    await this.client.query(
       `WITH updated AS (
-         UPDATE workshop_tasks
-         SET status = 'closed', updated_at = NOW()
-         WHERE id = $1 AND tenant_id = $2
-         RETURNING ${TASK_RAW_COLUMNS}
+         UPDATE task_stages SET label = $1, updated_at = NOW()
+         WHERE id = $2 AND tenant_id = $3 AND task_id = $4
+         RETURNING id
        ), audited AS (
          INSERT INTO audit_events (id, tenant_id, actor_membership_id, action, subject_type, subject_id, changes)
-         SELECT $3, $2, $4, 'workshop_task.closed', 'workshop_task', id, '{}'::jsonb
+         SELECT $5, $3, $6, 'workshop_task.stage_renamed', 'workshop_task', $4,
+           jsonb_build_object('stageId', $2, 'from', $7::text, 'to', $1)
          FROM updated
        )
-       SELECT ${TASK_COLUMNS} FROM updated`,
-      [taskId, context.tenantId, randomUUID(), context.membershipId],
+       SELECT 1 FROM updated`,
+      [input.label, stageId, context.tenantId, taskId, randomUUID(), context.membershipId, previousStage.label],
     );
 
-    return result.rows[0]!;
+    const task = (await this.loadTask(context, taskId))!;
+    return this.attachStages(context, task);
+  }
+
+  private async loadTask(context: TenantContext, taskId: string): Promise<StoredWorkshopTask | null> {
+    const result = await this.client.query<StoredWorkshopTask>(
+      `SELECT ${TASK_COLUMNS} FROM workshop_tasks WHERE id = $1 AND tenant_id = $2`,
+      [taskId, context.tenantId],
+    );
+    return result.rows[0] ?? null;
   }
 
   public async rescheduleTaskDeadline(
@@ -669,14 +1085,18 @@ export class PostgresWorkshopTaskRepository {
     taskId: string,
     newDeadlineAt: string | null,
     reason: string,
-  ): Promise<StoredWorkshopTask | null> {
-    const existing = await this.client.query<{ status: string }>(
-      'SELECT status FROM workshop_tasks WHERE id = $1 AND tenant_id = $2',
+  ): Promise<StoredWorkshopTaskWithStages | null> {
+    // Not requireClassicTask — reschedule is orthogonal to stage progress
+    // and has always worked for graph-node tasks too; only the rejected
+    // guard is new here (replacing the now-permanently-unreachable
+    // `status === 'closed'` check).
+    const existing = await this.client.query<{ rejectedAt: string | null }>(
+      'SELECT rejected_at AS "rejectedAt" FROM workshop_tasks WHERE id = $1 AND tenant_id = $2',
       [taskId, context.tenantId],
     );
     const current = existing.rows[0];
     if (!current) return null;
-    if (current.status === 'closed') throw new WorkshopTaskClosedError(taskId);
+    if (current.rejectedAt !== null) throw new WorkshopTaskRejectedError(taskId);
 
     const result = await this.client.query<StoredWorkshopTask>(
       `WITH updated AS (
@@ -701,7 +1121,7 @@ export class PostgresWorkshopTaskRepository {
       [taskId, context.tenantId, newDeadlineAt, reason, context.membershipId, randomUUID(), randomUUID()],
     );
 
-    return result.rows[0]!;
+    return this.attachStages(context, result.rows[0]!);
   }
 
   private async requireCurrentStatus(

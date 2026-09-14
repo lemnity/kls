@@ -8,6 +8,15 @@ import { getSessionToken } from '../../lib/session.js';
 import { CreateDepartmentButton } from './create-department-button.js';
 import { TaskBoard } from './task-board.js';
 
+interface TaskStage {
+  id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'done';
+  sortOrder: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
 interface Task {
   id: string;
   budgetItemId: string | null;
@@ -18,6 +27,8 @@ interface Task {
   description: string;
   deadlineAt: string | null;
   completedAt: string | null;
+  rejectedAt: string | null;
+  stages: TaskStage[];
 }
 
 interface MembershipOption {

@@ -2,11 +2,14 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { CheckIcon, SortIcon, TicketIcon } from '../../icons.js';
 import { pluralize } from '../../lib/format.js';
+import { canRevertTask, currentStageLabel, stageVisualState } from '../../lib/task-stages.js';
 import { useEscapeToClose } from '../../lib/use-escape-to-close.js';
 import type { Budget, WorkshopTask } from '../../lib/mock-data.js';
+import { AddStageForm, EditStageForm, TaskDecisionButtons } from '../../task-stage-controls.js';
 
 const BUDGET_STATUS_LABEL: Record<string, string> = {
   PRELIMINARY: 'Предварительная',
@@ -15,17 +18,8 @@ const BUDGET_STATUS_LABEL: Record<string, string> = {
 };
 
 const CALENDAR_DAY_COUNT = 100;
-const DONE_STATUSES = new Set(['completed', 'closed']);
 
-const CLASSIC_TASK_STATUS_LABEL: Record<string, string> = {
-  new: 'Новая',
-  assigned: 'Назначена',
-  accepted: 'Принята',
-  completed: 'Выполнена',
-  closed: 'Закрыта',
-};
-
-type DayCellStatus = 'done' | 'overdue' | 'in-progress' | null;
+type DayCellStatus = 'done' | 'overdue' | 'in-progress' | 'rejected' | null;
 
 function toDateOnly(iso: string): string {
   return iso.slice(0, 10);
@@ -43,7 +37,8 @@ function formatDayLabel(dateOnly: string): string {
 
 function dayCellStatus(tasksForDay: WorkshopTask[], day: string, today: string): DayCellStatus {
   if (tasksForDay.length === 0) return null;
-  if (tasksForDay.every((task) => DONE_STATUSES.has(task.status))) return 'done';
+  if (tasksForDay.every((task) => task.rejectedAt !== null)) return 'rejected';
+  if (tasksForDay.every((task) => task.completedAt !== null || task.rejectedAt !== null)) return 'done';
   return day < today ? 'overdue' : 'in-progress';
 }
 
@@ -80,8 +75,6 @@ function formatTaskRange(task: WorkshopTask): string {
   return start === end ? formatDayLabel(end) : `${formatDayLabel(start)} – ${formatDayLabel(end)}`;
 }
 
-const STEP_ORDER = ['new', 'assigned', 'accepted', 'completed', 'closed'] as const;
-
 interface CreateWorkshopTaskInput {
   workshopId: string;
   description: string;
@@ -96,11 +89,13 @@ type WorkshopOption = { id: string; name: string; isActive: boolean; parentWorks
 /**
  * A single task's lifecycle as a vertical stepper — visual style requested
  * by the user via a reference screenshot of a document e-signing flow.
- * Steps map 1:1 onto WorkshopTask's real status sequence (new → assigned →
- * accepted → completed → closed) and the one action shown per step calls
- * the same REST endpoints already used by workshops/[id]/task-board.tsx
- * (assign/accept/complete/close), so no new backend surface was needed for
- * this part.
+ * `task.stages` is now an arbitrary, user-extendable ordered list (see
+ * lib/task-stages.ts) instead of a fixed 5-value status; the "Принять /
+ * Вернуть в работу / Отклонить" row (TaskDecisionButtons, shared with
+ * workshops/[id]/task-board.tsx) sits inside whichever stage is currently
+ * in progress, and also on the last stage once the task is fully done
+ * (nothing stays "in progress" at that point, but revert/reject still
+ * apply there).
  */
 function TaskDetailStepper({
   task,
@@ -114,8 +109,9 @@ function TaskDetailStepper({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assigneeChoice, setAssigneeChoice] = useState('');
+  const [addingStage, setAddingStage] = useState(false);
+  const [editingStageId, setEditingStageId] = useState<string | null>(null);
 
-  const currentIndex = STEP_ORDER.indexOf(task.status as (typeof STEP_ORDER)[number]);
   const assignee = memberships.find((membership) => membership.id === task.assigneeMembershipId);
 
   async function runAction(path: string, method: string, body?: unknown): Promise<void> {
@@ -133,6 +129,8 @@ function TaskDetailStepper({
         return;
       }
       onUpdated((await response.json()) as WorkshopTask);
+      setAddingStage(false);
+      setEditingStageId(null);
     } catch {
       setError('Сеть недоступна. Попробуйте ещё раз.');
     } finally {
@@ -142,21 +140,70 @@ function TaskDetailStepper({
 
   return (
     <div className="task-stepper">
-      {STEP_ORDER.map((step, index) => {
-        const state = currentIndex < 0 ? 'pending' : index < currentIndex ? 'done' : index === currentIndex ? 'current' : 'pending';
+      {!assignee && !task.rejectedAt && (
+        <form
+          className="task-stepper__action"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (assigneeChoice) {
+              void runAction(`workshop-tasks/${task.id}/assign`, 'PATCH', { assigneeMembershipId: assigneeChoice });
+            }
+          }}
+        >
+          <select value={assigneeChoice} onChange={(event) => setAssigneeChoice(event.target.value)} required>
+            <option value="" disabled>
+              Выбрать исполнителя…
+            </option>
+            {memberships.map((membership) => (
+              <option key={membership.id} value={membership.id}>
+                {membership.userEmail}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="btn-pill btn-pill--accent btn-pill--small" disabled={pending || !assigneeChoice}>
+            Назначить
+          </button>
+        </form>
+      )}
+
+      {task.stages.map((stage, index) => {
+        const state = stageVisualState(stage);
+        const isLastStage = index === task.stages.length - 1;
+        const showDecisions = !task.rejectedAt && (state === 'current' || (isLastStage && task.completedAt !== null));
         return (
-          <div key={step} className={`task-stepper__step task-stepper__step--${state}`}>
+          <div key={stage.id} className={`task-stepper__step task-stepper__step--${state}`}>
             <span className="task-stepper__rail" aria-hidden="true">
               <span className="task-stepper__dot">{state === 'done' && <CheckIcon />}</span>
-              {index < STEP_ORDER.length - 1 && <span className="task-stepper__line" />}
+              {!isLastStage && <span className="task-stepper__line" />}
             </span>
             <div className="task-stepper__content">
               <p className="task-stepper__state">
                 {state === 'done' ? 'Выполнено' : state === 'current' ? 'Текущий этап' : 'Ожидает'}
               </p>
-              <p className="task-stepper__label">{CLASSIC_TASK_STATUS_LABEL[step]}</p>
 
-              {step !== 'new' && assignee && (
+              {editingStageId === stage.id ? (
+                <EditStageForm
+                  initialLabel={stage.label}
+                  submitting={pending}
+                  onCancel={() => setEditingStageId(null)}
+                  onSubmit={(label) => void runAction(`workshop-tasks/${task.id}/stages/${stage.id}`, 'PATCH', { label })}
+                />
+              ) : (
+                <p className="task-stepper__label">
+                  {stage.label}
+                  {!task.rejectedAt && (
+                    <button
+                      type="button"
+                      className="details-link task-stepper__edit-trigger"
+                      onClick={() => setEditingStageId(stage.id)}
+                    >
+                      Изменить
+                    </button>
+                  )}
+                </p>
+              )}
+
+              {index > 0 && assignee && (
                 <div className="task-stepper__person">
                   <span className="task-stepper__avatar" aria-hidden="true">
                     {assignee.userEmail.charAt(0).toUpperCase()}
@@ -165,85 +212,125 @@ function TaskDetailStepper({
                 </div>
               )}
 
-              {state === 'current' && step === 'new' && (
-                <form
-                  className="task-stepper__action"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (assigneeChoice) {
-                      void runAction(`workshop-tasks/${task.id}/assign`, 'PATCH', {
-                        assigneeMembershipId: assigneeChoice,
-                      });
-                    }
-                  }}
-                >
-                  <select value={assigneeChoice} onChange={(event) => setAssigneeChoice(event.target.value)} required>
-                    <option value="" disabled>
-                      Выбрать исполнителя…
-                    </option>
-                    {memberships.map((membership) => (
-                      <option key={membership.id} value={membership.id}>
-                        {membership.userEmail}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="submit" className="task-decision task-decision--accept" disabled={pending || !assigneeChoice}>
-                    <span className="task-decision__icon">
-                      <CheckIcon />
-                    </span>
-                    <span className="task-decision__label">Назначить</span>
-                  </button>
-                </form>
-              )}
-              {state === 'current' && step === 'assigned' && (
-                <button
-                  type="button"
-                  className="task-decision task-decision--accept"
+              {showDecisions && (
+                <TaskDecisionButtons
                   disabled={pending}
-                  onClick={() => void runAction(`workshop-tasks/${task.id}/accept`, 'POST')}
-                >
-                  <span className="task-decision__icon">
-                    <CheckIcon />
-                  </span>
-                  <span className="task-decision__label">Принять</span>
-                </button>
-              )}
-              {state === 'current' && step === 'accepted' && (
-                <button
-                  type="button"
-                  className="task-decision task-decision--accept"
-                  disabled={pending}
-                  onClick={() => void runAction(`workshop-tasks/${task.id}/complete`, 'POST')}
-                >
-                  <span className="task-decision__icon">
-                    <CheckIcon />
-                  </span>
-                  <span className="task-decision__label">Выполнено</span>
-                </button>
-              )}
-              {state === 'current' && step === 'completed' && (
-                <button
-                  type="button"
-                  className="task-decision task-decision--accept"
-                  disabled={pending}
-                  onClick={() => void runAction(`workshop-tasks/${task.id}/close`, 'POST')}
-                >
-                  <span className="task-decision__icon">
-                    <CheckIcon />
-                  </span>
-                  <span className="task-decision__label">Закрыть</span>
-                </button>
+                  canRevert={canRevertTask(task)}
+                  onAdvance={() => void runAction(`workshop-tasks/${task.id}/advance`, 'POST')}
+                  onRevert={() => void runAction(`workshop-tasks/${task.id}/revert`, 'POST')}
+                  onReject={() => void runAction(`workshop-tasks/${task.id}/reject`, 'POST')}
+                />
               )}
             </div>
           </div>
         );
       })}
+
+      {task.rejectedAt ? (
+        <p className="task-stepper__rejected-note">Задача отклонена.</p>
+      ) : addingStage ? (
+        <AddStageForm
+          submitting={pending}
+          onSubmit={(label) => void runAction(`workshop-tasks/${task.id}/stages`, 'POST', { label })}
+        />
+      ) : (
+        <button type="button" className="btn-pill btn-pill--ghost btn-pill--small" onClick={() => setAddingStage(true)}>
+          + Добавить этап
+        </button>
+      )}
+
       {error && (
         <p role="alert" className="task-row__error">
           {error}
         </p>
       )}
     </div>
+  );
+}
+
+const CELL_TOOLTIP_WIDTH = 240;
+const CELL_TOOLTIP_MARGIN = 12;
+const CELL_TOOLTIP_ESTIMATED_HEIGHT = 220;
+
+interface HoveredCell {
+  title: string;
+  day: string;
+  tasks: WorkshopTask[];
+  top: number;
+  left: number;
+  placement: 'below' | 'above';
+}
+
+/** Anchors the tooltip to a cell's on-screen rect, clamped so a cell near
+ * the grid's right edge or the page's bottom doesn't push the cloud off
+ * screen — flips above the cell when there isn't room below instead. */
+function placeCellTooltip(anchorRect: DOMRect): Pick<HoveredCell, 'top' | 'left' | 'placement'> {
+  const left = Math.min(
+    Math.max(anchorRect.left + anchorRect.width / 2, CELL_TOOLTIP_WIDTH / 2 + CELL_TOOLTIP_MARGIN),
+    window.innerWidth - CELL_TOOLTIP_WIDTH / 2 - CELL_TOOLTIP_MARGIN,
+  );
+  const fitsBelow = anchorRect.bottom + CELL_TOOLTIP_ESTIMATED_HEIGHT + CELL_TOOLTIP_MARGIN < window.innerHeight;
+  return {
+    left,
+    top: fitsBelow ? anchorRect.bottom + 8 : anchorRect.top - 8,
+    placement: fitsBelow ? 'below' : 'above',
+  };
+}
+
+/** A task's lifecycle as a compact dot rail — one dot per `task.stages`
+ * entry (an arbitrary, user-extendable list, not a fixed 5), shrunk down
+ * for the hover cloud (no actions, just "how far along is this task and
+ * which stage is it on right now"). */
+function MiniStepIndicator({ task }: { task: WorkshopTask }) {
+  return (
+    <span className="cell-tooltip__steps" role="img" aria-label={`Этап: ${currentStageLabel(task)}`}>
+      {task.stages.map((stage) => {
+        const state = stageVisualState(stage);
+        return (
+          <span
+            key={stage.id}
+            aria-hidden="true"
+            className={`cell-tooltip__step-dot${state !== 'pending' ? ` cell-tooltip__step-dot--${state}` : ''}`}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+/** Rendered via a portal into `document.body` — the grid's horizontal
+ * scroll container clips absolutely-positioned children that stray outside
+ * its own box, and a cell's own `:hover` scale transform would otherwise
+ * turn a `position: fixed` descendant into one anchored to the cell instead
+ * of the viewport. Escaping the DOM tree sidesteps both. */
+function CellTooltip({ cell }: { cell: HoveredCell }) {
+  return createPortal(
+    <div
+      className="cell-tooltip"
+      role="tooltip"
+      style={{
+        top: cell.top,
+        left: cell.left,
+        transform: cell.placement === 'below' ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+      }}
+    >
+      <div className="cell-tooltip__header">
+        <strong>{cell.title}</strong>
+        <span className="muted">
+          {formatDayLabel(cell.day)} · {cell.tasks.length} {pluralize(cell.tasks.length, 'задача', 'задачи', 'задач')}
+        </span>
+      </div>
+      <ul className="cell-tooltip__list">
+        {cell.tasks.map((task) => (
+          <li key={task.id} className="cell-tooltip__item">
+            <p className="cell-tooltip__item-title">{task.description}</p>
+            <MiniStepIndicator task={task} />
+            <p className="cell-tooltip__item-status">Сейчас: {currentStageLabel(task)}</p>
+          </li>
+        ))}
+      </ul>
+    </div>,
+    document.body,
   );
 }
 
@@ -291,6 +378,7 @@ function BudgetCalendarBoard({
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<{ workshopId: string; title: string; day: string } | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [hoveredCell, setHoveredCell] = useState<HoveredCell | null>(null);
   const [allMemberships, setAllMemberships] = useState<MembershipOption[]>([]);
   const [newTaskDescription, setNewTaskDescription] = useState('');
   const [newTaskAssigneeId, setNewTaskAssigneeId] = useState('');
@@ -387,6 +475,15 @@ function BudgetCalendarBoard({
   function closeModal(): void {
     setSelected(null);
     setSelectedTaskId(null);
+  }
+
+  function handleCellHover(event: React.MouseEvent<HTMLButtonElement>, title: string, day: string, dayTasks: WorkshopTask[]): void {
+    if (dayTasks.length === 0) return;
+    setHoveredCell({ title, day, tasks: dayTasks, ...placeCellTooltip(event.currentTarget.getBoundingClientRect()) });
+  }
+
+  function handleCellLeave(): void {
+    setHoveredCell(null);
   }
 
   useEscapeToClose(Boolean(selected), closeModal);
@@ -516,16 +613,25 @@ function BudgetCalendarBoard({
                   </span>
                   <div className="budget-gantt__cells">
                     {days.map((day) => {
-                      const status = dayCellStatus(byDay?.get(day) ?? [], day, today);
+                      const dayTasks = byDay?.get(day) ?? [];
+                      const status = dayCellStatus(dayTasks, day, today);
                       const isSelected = selected?.workshopId === workshopId && selected.day === day;
                       return (
                         <button
                           key={day}
                           type="button"
                           className={`budget-gantt__cell${status ? ` budget-gantt__cell--${status}` : ''}${isSelected ? ' budget-gantt__cell--selected' : ''}${isWeekend(day) ? ' budget-gantt__cell--weekend' : ''}`}
-                          title={`${title}, ${formatDayLabel(day)}`}
+                          aria-label={`${title}, ${formatDayLabel(day)}${dayTasks.length > 0 ? ` — ${dayTasks.length} ${pluralize(dayTasks.length, 'задача', 'задачи', 'задач')}` : ''}`}
                           onClick={() => openCell(workshopId, title, day)}
-                        />
+                          onMouseEnter={(event) => handleCellHover(event, title, day, dayTasks)}
+                          onMouseLeave={handleCellLeave}
+                        >
+                          {dayTasks.length > 0 && (
+                            <span className="budget-gantt__cell-count" aria-hidden="true">
+                              {dayTasks.length}
+                            </span>
+                          )}
+                        </button>
                       );
                     })}
                   </div>
@@ -535,6 +641,8 @@ function BudgetCalendarBoard({
           )}
         </div>
       </div>
+
+      {hoveredCell && !selected && <CellTooltip cell={hoveredCell} />}
 
       {selected && (
         <div className="task-modal-backdrop" onClick={closeModal}>
@@ -589,7 +697,7 @@ function BudgetCalendarBoard({
                               onClick={() => setSelectedTaskId(task.id)}
                             >
                               <span>{task.description}</span>
-                              <span className="muted">{CLASSIC_TASK_STATUS_LABEL[task.status] ?? task.status}</span>
+                              <span className="muted">{currentStageLabel(task)}</span>
                             </button>
                           </li>
                         ))}
@@ -765,11 +873,6 @@ export function BudgetView({ budget, workshopTasks }: { budget: Budget; workshop
           </Link>
         </div>
       </div>
-
-      <p className="budget-graph-notice muted">
-        Конструктор узлов — отдельный инструмент планирования; суммы в нём не связаны с этой сметой и считаются
-        независимо.
-      </p>
 
       {activeTab === 'calendar' ? (
         workshopOptions.length > 0 ? (

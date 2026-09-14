@@ -15,9 +15,19 @@ import {
   type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 
-import { CheckIcon, CrossIcon, UndoIcon } from '../../../icons.js';
+import {
+  CheckIcon,
+  ClipboardIcon,
+  CrossIcon,
+  DashboardIcon,
+  LayersIcon,
+  MaskIcon,
+  PackageIcon,
+  TableIcon,
+  UndoIcon,
+} from '../../../icons.js';
 import { useEscapeToClose } from '../../../lib/use-escape-to-close.js';
 
 type BudgetGraphNodeType = 'production' | 'workshop' | 'work' | 'material';
@@ -119,6 +129,29 @@ const CHILD_TYPE: Record<BudgetGraphNodeType, BudgetGraphNodeType | null> = {
   material: null,
 };
 
+// Depth order (root → leaf), used for the canvas legend rail and anywhere
+// else the four types need a stable, meaningful sequence rather than
+// object-key iteration order.
+const NODE_TYPE_ORDER: readonly BudgetGraphNodeType[] = ['production', 'workshop', 'work', 'material'];
+
+// One icon per node type — reused by the canvas card, the legend rail and
+// the side panel's heading, so the same visual vocabulary shows up
+// everywhere a node type is identified.
+const NODE_TYPE_ICON: Record<BudgetGraphNodeType, ComponentType<{ className?: string }>> = {
+  production: MaskIcon,
+  workshop: LayersIcon,
+  work: ClipboardIcon,
+  material: PackageIcon,
+};
+
+function pluralizeNodeCount(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'узел';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'узла';
+  return 'узлов';
+}
+
 /**
  * Compares a node's own planned amount against its rolled-up subtree total
  * (both already computed, no WorkshopTask involved — unlike the "agreed
@@ -146,17 +179,25 @@ function budgetVarianceClass(node: StoredBudgetGraphNode): string {
 function BudgetGraphNodeCard({ data, selected }: NodeProps) {
   const node = data as unknown as StoredBudgetGraphNode;
   const isInactiveAlternative = node.alternativeGroupId !== null && !node.isActive;
+  const TypeIcon = NODE_TYPE_ICON[node.nodeType];
   return (
     <div
-      className={`graph-node${selected ? ' graph-node--selected' : ''}${budgetVarianceClass(node)}${isInactiveAlternative ? ' graph-node--inactive-alternative' : ''}`}
+      className={`graph-node graph-node--${node.nodeType}${selected ? ' graph-node--selected' : ''}${budgetVarianceClass(node)}${isInactiveAlternative ? ' graph-node--inactive-alternative' : ''}`}
       tabIndex={0}
       role="group"
       aria-label={`${NODE_TYPE_LABEL[node.nodeType]}: ${node.title}${isInactiveAlternative ? ' (неактивная альтернатива)' : ''}`}
     >
       <Handle type="target" position={Position.Left} />
-      <span className="graph-node__type">{NODE_TYPE_LABEL[node.nodeType]}</span>
+      <div className="graph-node__head">
+        <span className="graph-node__icon" aria-hidden="true">
+          <TypeIcon />
+        </span>
+        <div className="graph-node__head-text">
+          <span className="graph-node__type">{NODE_TYPE_LABEL[node.nodeType]}</span>
+          <strong className="graph-node__title">{node.title}</strong>
+        </div>
+      </div>
       {isInactiveAlternative && <span className="graph-node__badge">неактивная альтернатива</span>}
-      <strong className="graph-node__title">{node.title}</strong>
       <div className="graph-node__stats">
         <div className="graph-node__stat">
           <span className="graph-node__stat-label">План</span>
@@ -213,6 +254,7 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   const [childCreating, setChildCreating] = useState(false);
 
   const selectedNode = items.find((item) => item.id === selectedId) ?? null;
+  const SelectedTypeIcon = selectedNode ? NODE_TYPE_ICON[selectedNode.nodeType] : null;
 
   useEscapeToClose(Boolean(selectedNode), () => setSelectedId(null));
 
@@ -696,6 +738,34 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
   return (
     <div className="budget-graph">
       <div className="budget-graph__toolbar">
+        <div className="budget-graph__toolbar-head">
+          <span className="delta-pill delta-pill--positive budget-graph__status">
+            <span className="budget-graph__status-dot" aria-hidden="true" />
+            {items.length} {pluralizeNodeCount(items.length)}
+          </span>
+
+          <div className="budget-graph__view-toggle" role="group" aria-label="Режим отображения">
+            <button
+              type="button"
+              className={`budget-graph__view-toggle-btn${viewMode === 'canvas' ? ' is-active' : ''}`}
+              aria-pressed={viewMode === 'canvas'}
+              onClick={() => setViewMode('canvas')}
+            >
+              <DashboardIcon />
+              Канвас
+            </button>
+            <button
+              type="button"
+              className={`budget-graph__view-toggle-btn${viewMode === 'table' ? ' is-active' : ''}`}
+              aria-pressed={viewMode === 'table'}
+              onClick={() => setViewMode('table')}
+            >
+              <TableIcon />
+              Таблица
+            </button>
+          </div>
+        </div>
+
         <form className="budget-graph__create-form" onSubmit={handleCreate}>
           <label>
             <span className="sr-only">Родительский узел</span>
@@ -772,16 +842,6 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
               ))}
           </div>
         )}
-
-        <div className="budget-graph__actions">
-          <button
-            type="button"
-            className="btn-pill btn-pill--ghost"
-            onClick={() => setViewMode(viewMode === 'canvas' ? 'table' : 'canvas')}
-          >
-            {viewMode === 'canvas' ? 'Табличный вид' : 'Канвас'}
-          </button>
-        </div>
       </div>
 
       {selectedNode && (
@@ -789,14 +849,24 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
           <div className="budget-graph__backdrop" onClick={() => setSelectedId(null)} />
           <form className="budget-graph__side-panel" onSubmit={handleUpdateDetails}>
             <div className="budget-graph__side-panel-header">
-              <span className="graph-node__type">{NODE_TYPE_LABEL[selectedNode.nodeType]}</span>
+              <div className={`budget-graph__side-panel-heading graph-node--${selectedNode.nodeType}`}>
+                {SelectedTypeIcon && (
+                  <span className="graph-node__icon" aria-hidden="true">
+                    <SelectedTypeIcon />
+                  </span>
+                )}
+                <div className="budget-graph__side-panel-heading-text">
+                  <span className="budget-graph__side-panel-eyebrow">Настройка узла</span>
+                  <span className="graph-node__type">{NODE_TYPE_LABEL[selectedNode.nodeType]}</span>
+                </div>
+              </div>
               <button
                 type="button"
                 className="icon-btn icon-btn--ghost"
                 aria-label="Закрыть панель"
                 onClick={() => setSelectedId(null)}
               >
-                ✕
+                <CrossIcon className="icon-inline" />
               </button>
             </div>
 
@@ -963,7 +1033,7 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
                           aria-label={`Удалить файл ${attachment.fileName}`}
                           onClick={() => handleDeleteAttachment(attachment.id)}
                         >
-                          ✕
+                          <CrossIcon className="icon-inline" />
                         </button>
                       </li>
                     ))}
@@ -1206,24 +1276,50 @@ export function BudgetGraphEditor({ budgetVersionId }: { budgetVersionId: string
           </table>
         </div>
       ) : (
-        <div className="budget-graph__canvas" data-testid="budget-graph-canvas">
-          <ReactFlow
-            nodes={flowNodes}
-            edges={flowEdges}
-            nodeTypes={NODE_TYPES}
-            onNodesChange={handleNodesChange}
-            onNodeDragStop={handleNodeDragStop}
-            onConnect={handleConnect}
-            onNodeClick={(_event, node) => setSelectedId(node.id)}
-            onPaneClick={() => setSelectedId(null)}
-            fitView
-            minZoom={0.2}
-            maxZoom={2}
-          >
-            <Background />
-            <Controls />
-            <MiniMap pannable zoomable />
-          </ReactFlow>
+        <div className="budget-graph__canvas-row">
+          <aside className="budget-graph__rail" aria-label="Типы узлов сметы">
+            <span className="budget-graph__rail-title">Типы узлов</span>
+            <ul className="budget-graph__rail-legend">
+              {NODE_TYPE_ORDER.map((type) => {
+                const TypeIcon = NODE_TYPE_ICON[type];
+                return (
+                  <li key={type} className={`budget-graph__rail-legend-item graph-node--${type}`}>
+                    <span className="graph-node__icon graph-node__icon--sm" aria-hidden="true">
+                      <TypeIcon />
+                    </span>
+                    <span className="budget-graph__rail-legend-label">{NODE_TYPE_LABEL[type]}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </aside>
+
+          <div className="budget-graph__canvas" data-testid="budget-graph-canvas">
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              nodeTypes={NODE_TYPES}
+              onNodesChange={handleNodesChange}
+              onNodeDragStop={handleNodeDragStop}
+              onConnect={handleConnect}
+              onNodeClick={(_event, node) => setSelectedId(node.id)}
+              onPaneClick={() => setSelectedId(null)}
+              fitView
+              minZoom={0.2}
+              maxZoom={2}
+            >
+              <Background gap={26} size={1.6} color="var(--color-border)" />
+              <Controls />
+              <MiniMap
+                pannable
+                zoomable
+                nodeColor={(flowNode) => {
+                  const nodeType = (flowNode.data as unknown as StoredBudgetGraphNode | undefined)?.nodeType;
+                  return nodeType ? `var(--node-accent-${nodeType})` : 'var(--color-accent)';
+                }}
+              />
+            </ReactFlow>
+          </div>
         </div>
       )}
     </div>

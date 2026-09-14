@@ -58,6 +58,20 @@
   --color-neutral-dot: #9aa2c0;
   --color-neutral-soft: #eef0f6;
 
+  /* Per-node-type accent, used by the budget graph's canvas cards, minimap
+     and legend rail — each is an indirection onto an existing semantic
+     color rather than a new hue, so light/dark theming stays automatic
+     (these never get their own [data-theme='dark'] / prefers-color-scheme
+     overrides, they just resolve through whichever token they point at). */
+  --node-accent-production: var(--color-accent);
+  --node-accent-production-soft: var(--color-accent-soft);
+  --node-accent-workshop: var(--color-spotlight);
+  --node-accent-workshop-soft: var(--color-spotlight-soft);
+  --node-accent-work: var(--color-success);
+  --node-accent-work-soft: var(--color-success-soft);
+  --node-accent-material: var(--color-text-muted);
+  --node-accent-material-soft: var(--color-neutral-soft);
+
   --radius-lg: 22px;
   --radius-md: 16px;
   --radius-sm: 11px;
@@ -836,6 +850,200 @@ input:focus-visible,
   align-items: start;
 }
 
+/* -------------------------------------------------------------------- */
+/* Quick cards row: messenger / today's tasks / premiere countdown       */
+/* -------------------------------------------------------------------- */
+
+.quick-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.quick-cards > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+}
+
+.messenger-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.messenger-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.messenger-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-dark);
+  font: 800 0.78rem/1 var(--font-sans);
+  flex-shrink: 0;
+}
+
+.messenger-name {
+  font-size: 0.88rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messenger-note {
+  margin-top: auto;
+  padding-top: 12px;
+  font-size: 0.78rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.today-tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.today-tasks-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.today-tasks-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.today-tasks-row__title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-tasks-row__meta {
+  font-size: 0.76rem;
+}
+
+/* Dark "spotlight" card — deliberately the odd one out in the row (ink
+   gradient, white text) so the one date that matters most on a given day
+   (the nearest premiere) reads as a highlight reel, not another data card. */
+.premiere-countdown {
+  background: linear-gradient(155deg, var(--color-ink) 0%, var(--color-ink-soft) 100%);
+  color: #ffffff;
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: transform var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+
+a.premiere-countdown:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 26px 50px -28px rgba(23, 19, 65, 0.5), 0 4px 14px -4px rgba(23, 19, 65, 0.2);
+}
+
+.premiere-countdown__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.premiere-countdown__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  flex-shrink: 0;
+}
+
+.premiere-countdown__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.premiere-countdown__label {
+  font: 800 0.72rem/1.4 var(--font-sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.premiere-countdown__title {
+  font: 800 1.2rem/1.3 var(--font-display);
+  margin-top: 4px;
+}
+
+.premiere-countdown__date {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.premiere-countdown__timer {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.premiere-countdown__digits {
+  font: 800 2rem/1 var(--font-display);
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.premiere-countdown__digits--tight {
+  font-size: 1.7rem;
+}
+
+.premiere-countdown__unit {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+}
+
+.premiere-countdown__past {
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.premiere-countdown--empty {
+  justify-content: center;
+}
+
+@media (max-width: 1180px) {
+  .quick-cards {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .quick-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Stat card row: 3-4 equal-width rich mini-visualization cards */
 
 .stat-grid {
@@ -1296,6 +1504,48 @@ input:focus-visible,
 .table-card__header h2 {
   font-size: 1.1rem;
   font-weight: 800;
+}
+
+.table-card__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.production-info-panel__collapse-toggle svg {
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.production-info-panel__collapse-icon--collapsed {
+  transform: rotate(-90deg);
+}
+
+/* .detail-grid has align-items: stretch so this card normally matches its
+   sibling's (taller) height. When collapsed there's no content left to
+   fill that height with — opt out of stretching so the whole card shrinks
+   down to just its header instead of leaving empty white space below it.
+   The grid track itself is narrowed by .detail-grid:has(...) above; here
+   we restack the header to fit that 72px strip and drop what doesn't. */
+.production-info-panel--collapsed {
+  align-self: start;
+  padding: 14px 8px;
+}
+
+.production-info-panel--collapsed .table-card__header {
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.production-info-panel--collapsed .donut-card__header-text h2,
+.production-info-panel--collapsed .details-link {
+  display: none;
+}
+
+.production-info-panel--collapsed .table-card__header-actions {
+  flex-direction: column;
 }
 
 .table-scroll {
@@ -1808,6 +2058,15 @@ input:focus-visible,
      screen instead of stopping at their natural content height. */
   flex: 1;
   min-height: 0;
+  transition: grid-template-columns var(--duration-base) var(--ease-out);
+}
+
+/* Collapsing "Сведения" shrinks it to a narrow column, not just a short
+   header — the grid TRACK itself has to shrink (a child can't narrow a
+   fixed-width track on its own), so the sibling budget card reclaims the
+   freed width instead of leaving it empty. */
+.detail-grid:has(.production-info-panel--collapsed) {
+  grid-template-columns: 72px 1fr;
 }
 
 /* The "Смета" card specifically needs a flex column so its single main
@@ -2077,6 +2336,7 @@ input:focus-visible,
 }
 
 .budget-gantt__cell {
+  position: relative;
   appearance: none;
   border: 1px solid transparent;
   width: 30px;
@@ -2087,6 +2347,24 @@ input:focus-visible,
   cursor: pointer;
   padding: 0;
   transition: transform var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+
+/* The day's task count, centered over the status color — a text-shadow
+   halo (not a filled chip) keeps the cell reading as a clean color swatch;
+   it holds up on every status color in both themes without per-variant
+   overrides, since a cell only ever carries a count when it also carries
+   one of the three status backgrounds below (never the plain neutral
+   tint — see `dayCellStatus`). */
+.budget-gantt__cell-count {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 800 0.68rem/1 var(--font-sans);
+  color: #ffffff;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.55), 0 1px 1px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
 }
 
 .budget-gantt__cell:hover {
@@ -2123,6 +2401,12 @@ input:focus-visible,
 
 .budget-gantt__cell--in-progress {
   background: var(--color-warning);
+}
+
+/* A day whose every task was rejected — muted rather than red/green/amber
+   so it doesn't read as "urgent" (overdue) or "good" (done). */
+.budget-gantt__cell--rejected {
+  background: var(--color-neutral-dot);
 }
 
 .budget-gantt__row--header {
@@ -2196,6 +2480,98 @@ input:focus-visible,
   background: var(--color-accent-soft);
 }
 
+/* Hover "cloud" for a calendar cell — portaled to <body> (see the
+   component comment on CellTooltip), so `position: fixed` here is always
+   relative to the viewport, never to a scrolled/transformed ancestor. */
+.cell-tooltip {
+  position: fixed;
+  z-index: 60;
+  width: 240px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.cell-tooltip__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.85rem;
+}
+
+.cell-tooltip__header .muted {
+  font-size: 0.72rem;
+}
+
+.cell-tooltip__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+.cell-tooltip__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cell-tooltip__item + .cell-tooltip__item {
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.cell-tooltip__item-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.cell-tooltip__item-status {
+  font-size: 0.72rem;
+  color: var(--color-text-soft);
+}
+
+/* Same done/current/pending palette as the full .task-stepper rail (green
+   / accent / neutral) — a shrunk-down echo of the same lifecycle, not a
+   competing color language. */
+.cell-tooltip__steps {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cell-tooltip__step-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-neutral-soft);
+  border: 1.5px solid var(--color-border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.cell-tooltip__step-dot--done {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.cell-tooltip__step-dot--current {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
 /* Centered, near-full-height task card opened from a calendar cell — a
    different pattern from .budget-graph__side-panel's edge drawer, since this
    is a focused single-task form rather than a wide multi-section editor. */
@@ -2232,7 +2608,7 @@ input:focus-visible,
   top: 0;
   right: 0;
   height: 100vh;
-  width: 440px;
+  width: 560px;
   max-width: 92vw;
   background: var(--color-surface);
   box-shadow: var(--shadow-overlay);
@@ -2518,6 +2894,21 @@ input:focus-visible,
   color: var(--color-text-soft);
 }
 
+/* Small "Изменить" text trigger next to a stage's own label, opening
+   EditStageForm inline — reuses the app's existing understated
+   .details-link look (see ProductionInfoPanel's "Редактировать"). */
+.task-stepper__edit-trigger {
+  margin-left: 8px;
+  font: 700 0.72rem/1 var(--font-sans);
+  vertical-align: middle;
+}
+
+.task-stepper__rejected-note {
+  font: 700 0.85rem/1.4 var(--font-sans);
+  color: var(--color-danger);
+  padding: 10px 0;
+}
+
 .task-stepper__person {
   display: flex;
   align-items: center;
@@ -2542,12 +2933,14 @@ input:focus-visible,
 
 .task-stepper__action {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
   margin-top: 10px;
 }
 
 .task-stepper__action select {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   appearance: none;
   background: var(--color-bg);
@@ -2555,6 +2948,27 @@ input:focus-visible,
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 0.82rem;
+  font-family: inherit;
+  color: var(--color-text);
+}
+
+/* Inline "Добавить этап" / "Редактировать этап" row — shared by
+   TaskDetailStepper and TaskBoard via task-stage-controls.tsx. */
+.task-stage-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-stage-form input[type='text'] {
+  flex: 1;
+  min-width: 160px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.85rem;
   font-family: inherit;
   color: var(--color-text);
 }
@@ -2637,7 +3051,8 @@ input:focus-visible,
 }
 
 @media (max-width: 1024px) {
-  .detail-grid {
+  .detail-grid,
+  .detail-grid:has(.production-info-panel--collapsed) {
     grid-template-columns: 1fr;
   }
 }
@@ -2746,15 +3161,11 @@ input:focus-visible,
   flex-wrap: wrap;
 }
 
-.status-pill--new {
+/* Task bucket — Активна/Завершена/Отклонена, derived from completedAt/
+   rejectedAt rather than the old fixed 5-value status. */
+.status-pill--active {
   background: var(--color-accent-soft);
   color: var(--color-accent-dark);
-}
-
-.status-pill--assigned,
-.status-pill--accepted {
-  background: var(--color-warning-soft);
-  color: var(--color-warning);
 }
 
 .status-pill--completed {
@@ -2762,9 +3173,35 @@ input:focus-visible,
   color: var(--color-success);
 }
 
-.status-pill--closed {
+.status-pill--rejected {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.task-row__stages {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-row__stage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
   background: var(--color-neutral-soft);
-  color: var(--color-text-soft);
+  border: 1.5px solid var(--color-border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.task-row__stage-dot--done {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.task-row__stage-dot--current {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .assign-form,
@@ -2840,14 +3277,79 @@ input:focus-visible,
 
 .budget-graph__toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+}
+
+.budget-graph__toolbar-head {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+/* Reuses the app's existing .delta-pill status-badge language (a green
+   "everything loaded" tone) rather than inventing a bespoke pill, then
+   adds only the small pulsing dot the reference's "Active" chip has. */
+.budget-graph__status {
+  gap: 7px;
+}
+
+.budget-graph__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  box-shadow: 0 0 0 3px var(--color-success-soft);
+  flex-shrink: 0;
+}
+
+/* Segmented canvas/table switch — labels the option itself (not the
+   destination), and highlights the current one, per the app's nav-state
+   convention rather than the old "click to become the other view" button. */
+.budget-graph__view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+.budget-graph__view-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  font: 700 0.8rem/1 var(--font-sans);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+
+.budget-graph__view-toggle-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.budget-graph__view-toggle-btn:hover {
+  color: var(--color-text);
+}
+
+.budget-graph__view-toggle-btn.is-active {
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: 16px 20px;
+  color: var(--color-accent-dark);
+  box-shadow: var(--shadow-soft);
 }
 
 .budget-graph__create-form {
@@ -2855,26 +3357,31 @@ input:focus-visible,
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border);
 }
 
 .budget-graph__create-form select,
 .budget-graph__create-form input {
   background: var(--color-bg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   color: var(--color-text);
-  padding: 10px 12px;
+  padding: 10px 16px;
   font-size: 0.85rem;
   min-height: 44px;
+  transition: border-color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.budget-graph__create-form select:focus,
+.budget-graph__create-form input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: var(--color-surface);
 }
 
 .budget-graph__create-form input[type='text'] {
   min-width: 160px;
-}
-
-.budget-graph__actions {
-  display: flex;
-  gap: 8px;
 }
 
 /* Dimmed backdrop + a fixed drawer sliding in from the right, used for the
@@ -2887,16 +3394,20 @@ input:focus-visible,
   z-index: 40;
 }
 
+/* A floating rounded card inset from the viewport edges — the "Step
+   Configuration" panel look — rather than an edge-to-edge drawer. */
 .budget-graph__side-panel {
   position: fixed;
-  top: 0;
-  right: 0;
-  height: 100vh;
-  width: 360px;
-  max-width: 90vw;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: 380px;
+  max-width: calc(100vw - 24px);
   background: var(--color-surface);
-  box-shadow: -20px 0 45px -18px rgba(23, 19, 65, 0.32);
-  padding: 24px 22px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+  padding: 22px 22px 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2906,8 +3417,31 @@ input:focus-visible,
 
 .budget-graph__side-panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.budget-graph__side-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.budget-graph__side-panel-heading-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.budget-graph__side-panel-eyebrow {
+  font: 800 0.66rem/1.3 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
 }
 
 .budget-graph__side-panel-field {
@@ -2936,6 +3470,7 @@ input:focus-visible,
   gap: 8px;
   margin-top: auto;
   padding-top: 12px;
+  border-top: 1px solid var(--color-border);
 }
 
 .btn-pill--small {
@@ -3055,7 +3590,7 @@ input:focus-visible,
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 6px;
+  gap: 2px 4px;
 }
 
 /* Round icon + coloured label — the "signature line" decision control
@@ -3064,12 +3599,12 @@ input:focus-visible,
 .task-decision {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   border: none;
   background: none;
-  padding: 2px 12px 2px 2px;
+  padding: 2px 8px 2px 2px;
   border-radius: var(--radius-pill);
-  font: 700 0.88rem/1 var(--font-sans);
+  font: 700 0.8rem/1 var(--font-sans);
   cursor: pointer;
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -3087,8 +3622,8 @@ input:focus-visible,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   color: #ffffff;
   flex-shrink: 0;
@@ -3096,8 +3631,8 @@ input:focus-visible,
 }
 
 .task-decision__icon svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
 }
 
 .task-decision--accept .task-decision__icon {
@@ -3155,10 +3690,66 @@ input:focus-visible,
   font-size: 0.85rem;
 }
 
+.budget-graph__canvas-row {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+
+/* Legend rail for the four node types — a real reference (colors carry no
+   meaning without it) rather than decoration, so it earns its place next
+   to the canvas without duplicating the persistent canvas/table switch. */
+.budget-graph__rail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 168px;
+  flex-shrink: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 16px 14px;
+}
+
+.budget-graph__rail-title {
+  font: 800 0.68rem/1.4 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-soft);
+}
+
+.budget-graph__rail-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+.budget-graph__rail-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.budget-graph__rail-legend-label {
+  font: 700 0.8rem/1.2 var(--font-sans);
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 860px) {
+  .budget-graph__rail {
+    display: none;
+  }
+}
+
 .budget-graph__canvas {
   position: relative;
+  flex: 1;
+  min-width: 0;
   height: 640px;
   background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
   overflow: hidden;
@@ -3168,7 +3759,8 @@ input:focus-visible,
    icon-in-a-soft-circle / soft-shadow language used across the app. */
 .budget-graph__canvas .react-flow__controls {
   box-shadow: var(--shadow-soft);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -3176,34 +3768,157 @@ input:focus-visible,
   background: var(--color-surface);
   border: none;
   border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.budget-graph__canvas .react-flow__controls-button:last-child {
+  border-bottom: none;
 }
 
 .budget-graph__canvas .react-flow__controls-button:hover {
   background: var(--color-accent-soft);
+  color: var(--color-accent-dark);
+}
+
+.budget-graph__canvas .react-flow__controls-button svg {
+  fill: currentColor;
 }
 
 .budget-graph__canvas .react-flow__minimap {
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-soft);
   overflow: hidden;
+  background: var(--color-surface);
+}
+
+.budget-graph__canvas .react-flow__minimap-mask {
+  fill: var(--color-bg);
+  fill-opacity: 0.6;
+}
+
+/* Connection dots + wires blend into the canvas until touched, matching
+   the reference's quiet wiring — an accent only appears on hover/connect
+   or when an edge is selected. */
+.budget-graph__canvas .react-flow__handle {
+  width: 9px;
+  height: 9px;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  transition: border-color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.budget-graph__canvas .react-flow__handle:hover,
+.budget-graph__canvas .react-flow__handle.connecting {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.budget-graph__canvas .react-flow__edge-path {
+  stroke: var(--color-neutral-dot);
+  stroke-width: 1.75;
+}
+
+.budget-graph__canvas .react-flow__edge:hover .react-flow__edge-path,
+.budget-graph__canvas .react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--color-accent);
 }
 
 /* Height is intentionally not set here (or via inline style from the node
    data) — the card sizes to its own content, so a stale stored height can
    never clip the title/stat rows behind the rounded border. Only width
    comes from stored layout, for a predictable canvas grid. */
+/* Indirection onto the shared --node-accent-* tokens (defined once in
+   :root, see the top of this file) so any element carrying one of these
+   four modifiers — the canvas card, the legend rail item, the side panel
+   heading — resolves the same color without redefining it three times. */
+.graph-node--production {
+  --node-accent: var(--node-accent-production);
+  --node-accent-soft: var(--node-accent-production-soft);
+}
+
+.graph-node--workshop {
+  --node-accent: var(--node-accent-workshop);
+  --node-accent-soft: var(--node-accent-workshop-soft);
+}
+
+.graph-node--work {
+  --node-accent: var(--node-accent-work);
+  --node-accent-soft: var(--node-accent-work-soft);
+}
+
+.graph-node--material {
+  --node-accent: var(--node-accent-material);
+  --node-accent-soft: var(--node-accent-material-soft);
+}
+
 .graph-node {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 14px 16px;
+  padding: 16px 16px 14px;
   background: var(--color-surface);
   border: 2px solid transparent;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-soft);
   cursor: grab;
   transition: box-shadow var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
+}
+
+/* Category color as a top edge stripe — its own border-radius keeps it
+   from bleeding past the card's rounded corners without needing
+   `overflow: hidden` on `.graph-node`, which would clip the connection
+   handles sitting half outside its box. */
+.graph-node::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: var(--node-accent, var(--color-accent));
+}
+
+.graph-node__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.graph-node__head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.graph-node__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--node-accent-soft, var(--color-accent-soft));
+  color: var(--node-accent, var(--color-accent));
+  flex-shrink: 0;
+}
+
+.graph-node__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.graph-node__icon--sm {
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+}
+
+.graph-node__icon--sm svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* No `transform` here on purpose: React Flow computes each drag frame's
@@ -3419,5 +4134,6 @@ input:focus-visible,
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--color-border);
 }

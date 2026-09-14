@@ -7,16 +7,23 @@ import { PostgresBudgetRepository } from './postgres-budget-repository.js';
 import {
   PostgresWorkshopTaskRepository,
   WorkshopTaskAfterTaskNotFoundError,
+  WorkshopTaskAlreadyCompletedError,
   WorkshopTaskAlreadyDecidedError,
   WorkshopTaskAlreadyExistsError,
+  WorkshopTaskAlreadyRejectedError,
   WorkshopTaskAssigneeNotFoundError,
   WorkshopTaskBudgetItemNotFoundError,
   WorkshopTaskBudgetNotApprovedError,
-  WorkshopTaskClosedError,
   WorkshopTaskGraphNodeNotFoundError,
   WorkshopTaskGraphNodeNotWorkshopError,
   WorkshopTaskInvalidTransitionError,
+  WorkshopTaskNoPrecedingStageError,
+  WorkshopTaskNotClassicError,
+  WorkshopTaskRejectedError,
+  WorkshopTaskStageNotFoundError,
 } from './postgres-workshop-task-repository.js';
+
+const DEFAULT_STAGE_LABELS = ['Новая', 'Назначена', 'Принята', 'Выполнена', 'Закрыта'];
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIntegration = databaseUrl ? describe : describe.skip;
@@ -61,10 +68,13 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
       budgetItemId: itemId,
       productionId: tenant.productionId,
       workshopId: tenant.workshopId,
-      status: 'new',
+      status: 'active',
       description: 'Сшить костюм',
       assigneeMembershipId: null,
+      rejectedAt: null,
     });
+    expect(task.stages.map((stage) => stage.label)).toEqual(DEFAULT_STAGE_LABELS);
+    expect(task.stages.map((stage) => stage.status)).toEqual(['in_progress', 'pending', 'pending', 'pending', 'pending']);
     await expect(
       client.query(
         "SELECT tenant_id, actor_membership_id, action, subject_type, subject_id FROM audit_events WHERE action = 'workshop_task.created' AND subject_id = $1",
@@ -208,54 +218,137 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
     expect(listB).toEqual([]);
   });
 
-  it('walks a task through the full lifecycle: assign -> accept -> complete -> close', async () => {
+  it('walks a task through assign -> advance x4 -> completed, with a real revert', async () => {
     const tenant = await createTenantFixture(client, 'Tenant A');
     const taskRepository = new PostgresWorkshopTaskRepository(client);
     const task = await createReadyTask(client, tenant);
 
     const assigned = await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
-    expect(assigned).toMatchObject({ status: 'assigned', assigneeMembershipId: tenant.context.membershipId });
+    expect(assigned).toMatchObject({ assigneeMembershipId: tenant.context.membershipId });
+    expect(assigned!.stages[0]).toMatchObject({ label: 'Новая', status: 'in_progress' });
 
-    const accepted = await taskRepository.acceptTask(tenant.context, task.id);
-    expect(accepted).toMatchObject({ status: 'accepted' });
+    const afterFirstAdvance = await taskRepository.advanceTask(tenant.context, task.id);
+    expect(afterFirstAdvance!.stages.map((stage) => stage.status)).toEqual([
+      'done', 'in_progress', 'pending', 'pending', 'pending',
+    ]);
+    expect(afterFirstAdvance!.completedAt).toBeNull();
 
-    const completed = await taskRepository.completeTask(tenant.context, task.id);
-    expect(completed).toMatchObject({ status: 'completed' });
-    expect(completed!.completedAt).not.toBeNull();
+    const reverted = await taskRepository.revertTask(tenant.context, task.id);
+    expect(reverted!.stages.map((stage) => stage.status)).toEqual([
+      'in_progress', 'pending', 'pending', 'pending', 'pending',
+    ]);
 
-    const closed = await taskRepository.closeTask(tenant.context, task.id);
-    expect(closed).toMatchObject({ status: 'closed' });
+    // Advance all the way through to the end — 5 calls total from a
+    // freshly-reverted stage0-in_progress state (one per stage).
+    await taskRepository.advanceTask(tenant.context, task.id);
+    await taskRepository.advanceTask(tenant.context, task.id);
+    await taskRepository.advanceTask(tenant.context, task.id);
+    await taskRepository.advanceTask(tenant.context, task.id);
+    const finished = await taskRepository.advanceTask(tenant.context, task.id);
+    expect(finished!.stages.every((stage) => stage.status === 'done')).toBe(true);
+    expect(finished!.completedAt).not.toBeNull();
+
+    await expect(
+      taskRepository.advanceTask(tenant.context, task.id),
+    ).rejects.toBeInstanceOf(WorkshopTaskAlreadyCompletedError);
+
+    const revertedFromDone = await taskRepository.revertTask(tenant.context, task.id);
+    expect(revertedFromDone!.completedAt).toBeNull();
+    expect(revertedFromDone!.stages.at(-1)).toMatchObject({ status: 'in_progress' });
 
     await expect(
       client.query("SELECT action FROM audit_events WHERE subject_id = $1 AND action LIKE 'workshop_task.%' ORDER BY action", [task.id]),
     ).resolves.toMatchObject({
       rows: [
-        { action: 'workshop_task.accepted' },
+        { action: 'workshop_task.advanced' },
+        { action: 'workshop_task.advanced' },
+        { action: 'workshop_task.advanced' },
+        { action: 'workshop_task.advanced' },
+        { action: 'workshop_task.advanced' },
+        { action: 'workshop_task.advanced' },
         { action: 'workshop_task.assigned' },
-        { action: 'workshop_task.closed' },
-        { action: 'workshop_task.completed' },
         { action: 'workshop_task.created' },
+        { action: 'workshop_task.reverted' },
+        { action: 'workshop_task.reverted' },
       ],
     });
   });
 
-  it('rejects assigning a task that is not new', async () => {
+  it('allows reassigning a task at any time (no status precondition)', async () => {
     const tenant = await createTenantFixture(client, 'Tenant A');
     const taskRepository = new PostgresWorkshopTaskRepository(client);
     const task = await createReadyTask(client, tenant);
+    const other = await createMembershipFixture(client, tenant.tenantId, 'Петров');
     await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
 
-    await expect(
-      taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId),
-    ).rejects.toBeInstanceOf(WorkshopTaskInvalidTransitionError);
+    const reassigned = await taskRepository.assignTask(tenant.context, task.id, other);
+    expect(reassigned).toMatchObject({ assigneeMembershipId: other });
   });
 
-  it('rejects accepting a task that has not been assigned', async () => {
+  it('adds a custom stage at the end and after a chosen stage, and renames a stage', async () => {
     const tenant = await createTenantFixture(client, 'Tenant A');
     const taskRepository = new PostgresWorkshopTaskRepository(client);
     const task = await createReadyTask(client, tenant);
 
-    await expect(taskRepository.acceptTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskInvalidTransitionError);
+    const appended = await taskRepository.addTaskStage(tenant.context, task.id, { label: 'Согласование' });
+    expect(appended!.stages.map((stage) => stage.label)).toEqual([...DEFAULT_STAGE_LABELS, 'Согласование']);
+    expect(appended!.stages.at(-1)).toMatchObject({ status: 'pending' });
+
+    const firstStageId = task.stages[0]!.id;
+    const inserted = await taskRepository.addTaskStage(tenant.context, task.id, {
+      label: 'Проверка ткани',
+      afterStageId: firstStageId,
+    });
+    expect(inserted!.stages.map((stage) => stage.label)).toEqual([
+      'Новая', 'Проверка ткани', 'Назначена', 'Принята', 'Выполнена', 'Закрыта', 'Согласование',
+    ]);
+
+    const renamedStageId = inserted!.stages[1]!.id;
+    const renamed = await taskRepository.editTaskStage(tenant.context, task.id, renamedStageId, {
+      label: 'Проверка материала',
+    });
+    expect(renamed!.stages[1]).toMatchObject({ label: 'Проверка материала' });
+
+    await expect(
+      taskRepository.addTaskStage(tenant.context, task.id, { label: 'X', afterStageId: randomUUID() }),
+    ).rejects.toBeInstanceOf(WorkshopTaskStageNotFoundError);
+    await expect(
+      taskRepository.editTaskStage(tenant.context, task.id, randomUUID(), { label: 'X' }),
+    ).rejects.toBeInstanceOf(WorkshopTaskStageNotFoundError);
+  });
+
+  it('rejects reverting before the first stage', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    await expect(
+      taskRepository.revertTask(tenant.context, task.id),
+    ).rejects.toBeInstanceOf(WorkshopTaskNoPrecedingStageError);
+  });
+
+  it('rejects every mutation on a rejected task, and rejecting twice', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await createReadyTask(client, tenant);
+
+    const rejected = await taskRepository.rejectTask(tenant.context, task.id);
+    expect(rejected).toMatchObject({ status: 'rejected' });
+    expect(rejected!.rejectedAt).not.toBeNull();
+
+    await expect(taskRepository.advanceTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
+    await expect(taskRepository.revertTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
+    await expect(
+      taskRepository.addTaskStage(tenant.context, task.id, { label: 'Доп. этап' }),
+    ).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
+    await expect(
+      taskRepository.editTaskStage(tenant.context, task.id, task.stages[0]!.id, { label: 'X' }),
+    ).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
+    await expect(
+      taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId),
+    ).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
+
+    await expect(taskRepository.rejectTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskAlreadyRejectedError);
   });
 
   it('rejects assigning to a nonexistent membership', async () => {
@@ -320,18 +413,15 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
     expect(cleared).toMatchObject({ deadlineAt: null });
   });
 
-  it('rejects rescheduling a closed task', async () => {
+  it('rejects rescheduling a rejected task', async () => {
     const tenant = await createTenantFixture(client, 'Tenant A');
     const taskRepository = new PostgresWorkshopTaskRepository(client);
     const task = await createReadyTask(client, tenant);
-    await taskRepository.assignTask(tenant.context, task.id, tenant.context.membershipId);
-    await taskRepository.acceptTask(tenant.context, task.id);
-    await taskRepository.completeTask(tenant.context, task.id);
-    await taskRepository.closeTask(tenant.context, task.id);
+    await taskRepository.rejectTask(tenant.context, task.id);
 
     await expect(
       taskRepository.rescheduleTaskDeadline(tenant.context, task.id, '2026-12-24', 'Слишком поздно'),
-    ).rejects.toBeInstanceOf(WorkshopTaskClosedError);
+    ).rejects.toBeInstanceOf(WorkshopTaskRejectedError);
   });
 
   it('returns null when rescheduling a task outside the tenant', async () => {
@@ -503,6 +593,24 @@ describeIntegration('PostgresWorkshopTaskRepository', () => {
     const rejected = await taskRepository.recordLeadDecision(tenant.context, task.id, 'rejected');
     expect(rejected).toMatchObject({ status: 'rejected' });
     expect(rejected!.completedAt).toBeNull();
+  });
+
+  it('rejects the new classic-only stage endpoints on a graph-node task', async () => {
+    const tenant = await createTenantFixture(client, 'Tenant A');
+    const { graphNodeId } = await createWorkshopNodeFixture(client, tenant);
+    const taskRepository = new PostgresWorkshopTaskRepository(client);
+    const task = await taskRepository.createTaskForGraphNode(tenant.context, graphNodeId, {
+      description: 'Смета на стулья',
+      plannedAmount: '1500.00',
+      assigneeMembershipIds: [tenant.context.membershipId],
+    });
+
+    await expect(
+      taskRepository.addTaskStage(tenant.context, task.id, { label: 'X' }),
+    ).rejects.toBeInstanceOf(WorkshopTaskNotClassicError);
+    await expect(taskRepository.advanceTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskNotClassicError);
+    await expect(taskRepository.revertTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskNotClassicError);
+    await expect(taskRepository.rejectTask(tenant.context, task.id)).rejects.toBeInstanceOf(WorkshopTaskNotClassicError);
   });
 });
 

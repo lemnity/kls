@@ -2,12 +2,37 @@ import { redirect } from 'next/navigation';
 
 import { AppShell } from './app-shell.js';
 import { CreateProductionButton } from './create-production-button.js';
-import { ArrowUpRightIcon, CalendarIcon, DocumentIcon, LayersIcon, MaskIcon } from './icons.js';
+import {
+  ArrowUpRightIcon,
+  CalendarIcon,
+  ClipboardIcon,
+  DocumentIcon,
+  LayersIcon,
+  MaskIcon,
+  MessageIcon,
+} from './icons.js';
 import { apiFetch } from './lib/api.js';
 import { formatPremiereDate, humanizeStatus, pluralize } from './lib/format.js';
-import { MOCK_MEMBERSHIPS, MOCK_PRODUCTIONS, type Membership, type Production } from './lib/mock-data.js';
+import { MOCK_MEMBERSHIPS, MOCK_PRODUCTIONS, type Membership, type Production, type WorkshopTask } from './lib/mock-data.js';
 import { getSessionToken } from './lib/session.js';
+import { PremiereCountdownCard } from './premiere-countdown-card.js';
 import { ProductionsTable } from './productions-table.js';
+
+interface TodayTask {
+  id: string;
+  description: string;
+  productionTitle: string;
+  workshopName: string;
+  status: string;
+}
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  new: 'Новая',
+  assigned: 'Назначена',
+  accepted: 'Принята',
+  completed: 'Выполнена',
+  closed: 'Закрыта',
+};
 
 export default async function HomePage() {
   const token = await getSessionToken();
@@ -41,6 +66,7 @@ export default async function HomePage() {
   const premierePercent = total ? Math.round((withPremiere / total) * 100) : 0;
   const topStatus = distribution[0] ?? null;
   const avgStatusCount = distribution.length ? total / distribution.length : 0;
+  const todaysTasks = await loadTodaysTasks(productions, token);
 
   return (
     <AppShell>
@@ -56,6 +82,89 @@ export default async function HomePage() {
           </div>
           <CreateProductionButton memberships={memberships} />
         </section>
+
+        <div className="quick-cards">
+          <article className="card messenger-card">
+            <div className="table-card__header">
+              <div className="donut-card__header-text">
+                <span className="stat-card__icon">
+                  <MessageIcon />
+                </span>
+                <h2>Мессенджер</h2>
+              </div>
+              <span className="tab tab--soon" aria-disabled="true">
+                скоро
+              </span>
+            </div>
+            {memberships.length === 0 ? (
+              <p className="empty-state">В тенанте пока нет участников.</p>
+            ) : (
+              <ul className="messenger-list">
+                {memberships.slice(0, 5).map((membership) => (
+                  <li key={membership.id} className="messenger-row">
+                    <span className="messenger-avatar" aria-hidden="true">
+                      {membership.userEmail.charAt(0).toUpperCase()}
+                    </span>
+                    <span className="messenger-name">{membership.userEmail}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="muted messenger-note">
+              Обмен сообщениями ещё не подключён — пока здесь список участников тенанта.
+            </p>
+          </article>
+
+          <article className="card">
+            <div className="table-card__header">
+              <div className="donut-card__header-text">
+                <span className="stat-card__icon">
+                  <ClipboardIcon />
+                </span>
+                <h2>Задачи на сегодня</h2>
+              </div>
+              <span className="muted">{todaysTasks.length}</span>
+            </div>
+            {todaysTasks.length === 0 ? (
+              <p className="empty-state">На сегодня задач со сроком нет.</p>
+            ) : (
+              <ul className="today-tasks-list">
+                {todaysTasks.slice(0, 5).map((task) => (
+                  <li key={task.id} className="today-tasks-row">
+                    <span className={`status-pill status-pill--${task.status}`}>
+                      {TASK_STATUS_LABEL[task.status] ?? task.status}
+                    </span>
+                    <span className="today-tasks-row__body">
+                      <span className="today-tasks-row__title">{task.description}</span>
+                      <span className="muted today-tasks-row__meta">
+                        {task.productionTitle} · {task.workshopName}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
+
+          {premiereHighlight ? (
+            <PremiereCountdownCard
+              label={premiereHighlight.label}
+              productionId={premiereHighlight.production.id}
+              productionTitle={premiereHighlight.production.title}
+              premiereDate={premiereHighlight.production.premiereDate as string}
+            />
+          ) : (
+            <article className="card premiere-countdown premiere-countdown--empty">
+              <div className="premiere-countdown__header">
+                <span className="premiere-countdown__icon" aria-hidden="true">
+                  <CalendarIcon />
+                </span>
+                <span className="premiere-countdown__label">Премьера</span>
+              </div>
+              <p className="muted">Даты премьер пока не назначены ни у одной постановки.</p>
+            </article>
+          )}
+        </div>
 
         <div className="stat-grid">
           <article className="stat-card">
@@ -261,6 +370,51 @@ async function loadMemberships(token: string): Promise<Membership[]> {
   if (!response.ok) return [];
 
   return (await response.json()) as Membership[];
+}
+
+/**
+ * Tasks (classic, single-assignee) across every production whose deadline
+ * falls on today — there's no single "all tasks in the tenant" endpoint, so
+ * this fans out one request per production and filters client-side. Fine
+ * at demo-tenant scale; would need a real aggregation endpoint before this
+ * stops being fine.
+ */
+async function loadTodaysTasks(productions: Production[], token: string): Promise<TodayTask[]> {
+  if (process.env.E2E_MOCK_PRODUCTIONS === '1' || productions.length === 0) {
+    return [];
+  }
+
+  const workshopNameById = await loadWorkshopNames(token);
+  const todayDateOnly = new Date().toISOString().slice(0, 10);
+
+  const perProduction = await Promise.all(
+    productions.map(async (production) => {
+      const response = await apiFetch(`/v1/productions/${production.id}/workshop-tasks`, { token });
+      if (!response.ok) return [];
+      const tasks = (await response.json()) as WorkshopTask[];
+      return tasks
+        .filter((task) => task.deadlineAt?.slice(0, 10) === todayDateOnly)
+        .map(
+          (task): TodayTask => ({
+            id: task.id,
+            description: task.description,
+            productionTitle: production.title,
+            workshopName: workshopNameById.get(task.workshopId) ?? 'Цех',
+            status: task.status,
+          }),
+        );
+    }),
+  );
+
+  return perProduction.flat();
+}
+
+async function loadWorkshopNames(token: string): Promise<Map<string, string>> {
+  const response = await apiFetch('/v1/organization/workshops', { token });
+  if (!response.ok) return new Map();
+
+  const workshops = (await response.json()) as { id: string; name: string }[];
+  return new Map(workshops.map((workshop) => [workshop.id, workshop.name]));
 }
 
 function productionCountLabel(count: number): string {

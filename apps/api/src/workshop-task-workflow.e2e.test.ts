@@ -80,18 +80,21 @@ describeIntegration('workshop task workflow E2E', () => {
 
       const createdTask = await inject(app, 'POST', `/v1/budget-items/${budgetItemId}/tasks`, authorization, {});
       expect(createdTask.statusCode).toBe(201);
-      const taskId = createdTask.json<{ id: string; status: string }>().id;
-      expect(createdTask.json<{ status: string }>().status).toBe('new');
+      const taskId = createdTask.json<{ id: string; status: string; stages: { label: string; status: string }[] }>().id;
+      expect(createdTask.json<{ status: string }>().status).toBe('active');
+      expect(createdTask.json<{ stages: { label: string; status: string }[] }>().stages).toMatchObject([
+        { label: 'Новая', status: 'in_progress' },
+        { label: 'Назначена', status: 'pending' },
+        { label: 'Принята', status: 'pending' },
+        { label: 'Выполнена', status: 'pending' },
+        { label: 'Закрыта', status: 'pending' },
+      ]);
 
       const assigned = await inject(app, 'PATCH', `/v1/workshop-tasks/${taskId}/assign`, authorization, {
         assigneeMembershipId: tenant.membershipId,
       });
       expect(assigned.statusCode).toBe(200);
-      expect(assigned.json<{ status: string }>().status).toBe('assigned');
-
-      const accepted = await inject(app, 'POST', `/v1/workshop-tasks/${taskId}/accept`, authorization, {});
-      expect(accepted.statusCode).toBe(200);
-      expect(accepted.json<{ status: string }>().status).toBe('accepted');
+      expect(assigned.json<{ assigneeMembershipId: string }>().assigneeMembershipId).toBe(tenant.membershipId);
 
       const rescheduleWithoutReason = await inject(app, 'PATCH', `/v1/workshop-tasks/${taskId}/deadline`, authorization, {
         deadlineAt: '2026-12-24',
@@ -105,13 +108,18 @@ describeIntegration('workshop task workflow E2E', () => {
       expect(rescheduleWithReason.statusCode).toBe(200);
       expect(rescheduleWithReason.json<{ deadlineAt: string }>().deadlineAt).toBe('2026-12-24T00:00:00Z');
 
-      const completed = await inject(app, 'POST', `/v1/workshop-tasks/${taskId}/complete`, authorization, {});
-      expect(completed.statusCode).toBe(200);
-      expect(completed.json<{ status: string }>().status).toBe('completed');
-
-      const closed = await inject(app, 'POST', `/v1/workshop-tasks/${taskId}/close`, authorization, {});
-      expect(closed.statusCode).toBe(200);
-      expect(closed.json<{ status: string }>().status).toBe('closed');
+      // "Принять" through every stage — same overall depth as the old
+      // assign→accept→complete→close walk, expressed as 5 generic advances
+      // instead of 3 fixed-name transitions.
+      let lastAdvance!: Awaited<ReturnType<typeof inject>>;
+      for (let i = 0; i < 5; i += 1) {
+        lastAdvance = await inject(app, 'POST', `/v1/workshop-tasks/${taskId}/advance`, authorization, {});
+        expect(lastAdvance.statusCode).toBe(200);
+      }
+      expect(lastAdvance.json<{ completedAt: string | null; stages: { status: string }[] }>().completedAt).not.toBeNull();
+      expect(
+        lastAdvance.json<{ stages: { status: string }[] }>().stages.every((stage) => stage.status === 'done'),
+      ).toBe(true);
 
       const list = await app.inject({
         method: 'GET',
@@ -119,7 +127,7 @@ describeIntegration('workshop task workflow E2E', () => {
         headers: { authorization },
       });
       expect(list.statusCode).toBe(200);
-      expect(list.json<{ id: string }[]>()).toEqual([expect.objectContaining({ id: taskId, status: 'closed' })]);
+      expect(list.json<{ id: string }[]>()).toEqual([expect.objectContaining({ id: taskId, status: 'active' })]);
 
       await expect(
         client.query(
@@ -128,14 +136,72 @@ describeIntegration('workshop task workflow E2E', () => {
         ),
       ).resolves.toMatchObject({
         rows: [
-          { action: 'workshop_task.accepted' },
+          { action: 'workshop_task.advanced' },
+          { action: 'workshop_task.advanced' },
+          { action: 'workshop_task.advanced' },
+          { action: 'workshop_task.advanced' },
+          { action: 'workshop_task.advanced' },
           { action: 'workshop_task.assigned' },
-          { action: 'workshop_task.closed' },
-          { action: 'workshop_task.completed' },
           { action: 'workshop_task.created' },
           { action: 'workshop_task.deadline_changed' },
         ],
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('rejects a task, then rejects any further reschedule on it', async () => {
+    const tenant = await createTenantAdmin(client, 'Tenant Workflow Reject');
+    const app = await createApiApp({
+      localPasswordAuthenticator: new LocalPasswordAuthService({
+        repository: new PostgresLocalAuthRepository(client),
+      }),
+      permissionResolver: new PostgresPermissionResolver(client),
+      productionRepository: new PostgresProductionRepository(client),
+      budgetRepository: new PostgresBudgetRepository(client),
+      workshopRepository: new PostgresWorkshopRepository(client),
+      workshopTaskRepository: new PostgresWorkshopTaskRepository(client),
+    });
+
+    try {
+      const token = await login(app, tenant.email, tenant.password);
+      const authorization = `Bearer ${token}`;
+
+      const workshop = await inject(app, 'POST', '/v1/organization/workshops', authorization, { name: 'Цех' });
+      const workshopId = workshop.json<{ id: string }>().id;
+      const production = await inject(app, 'POST', '/v1/productions', authorization, { title: 'Ревизор', status: 'draft' });
+      const productionId = production.json<{ id: string }>().id;
+      const budget = await inject(app, 'POST', `/v1/productions/${productionId}/budgets`, authorization, {
+        sections: [{
+          workshopId,
+          title: 'Цех',
+          items: [{ description: 'Задача', quantity: '1', unit: 'шт', unitPrice: '100.00' }],
+        }],
+      });
+      const budgetBody = budget.json<{ id: string; sections: { items: { id: string }[] }[] }>();
+      const budgetItemId = budgetBody.sections[0]!.items[0]!.id;
+      await inject(app, 'POST', `/v1/budgets/${budgetBody.id}/approve`, authorization, {});
+      const createdTask = await inject(app, 'POST', `/v1/budget-items/${budgetItemId}/tasks`, authorization, {});
+      const taskId = createdTask.json<{ id: string }>().id;
+
+      const rejected = await inject(app, 'POST', `/v1/workshop-tasks/${taskId}/reject`, authorization, {});
+      expect(rejected.statusCode).toBe(200);
+      expect(rejected.json<{ status: string; rejectedAt: string | null }>()).toMatchObject({ status: 'rejected' });
+      expect(rejected.json<{ rejectedAt: string | null }>().rejectedAt).not.toBeNull();
+
+      const rescheduleAfterReject = await inject(app, 'PATCH', `/v1/workshop-tasks/${taskId}/deadline`, authorization, {
+        deadlineAt: '2026-12-24',
+        reason: 'Слишком поздно',
+      });
+      expect(rescheduleAfterReject.statusCode).toBe(409);
+
+      await expect(
+        client.query(
+          "SELECT count(*)::int AS count FROM audit_events WHERE action = 'workshop_task.rejected' AND subject_id = $1",
+          [taskId],
+        ),
+      ).resolves.toMatchObject({ rows: [{ count: 1 }] });
     } finally {
       await app.close();
     }
