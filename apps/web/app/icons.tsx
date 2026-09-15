@@ -279,3 +279,12 @@ export function PackageIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function EditIcon({ className }: IconProps) {
+  return (
+    <svg {...BASE_PROPS} className={className}>
+      <path d="M4 20h4l10.5-10.5a2 2 0 0 0 0-2.8l-1.2-1.2a2 2 0 0 0-2.8 0L4 16v4Z" />
+      <line x1="13.5" y1="6.5" x2="17.5" y2="10.5" />
+    </svg>
+  );
+}

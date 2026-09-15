@@ -189,8 +189,8 @@ function TaskDetailStepper({
                   onSubmit={(label) => void runAction(`workshop-tasks/${task.id}/stages/${stage.id}`, 'PATCH', { label })}
                 />
               ) : (
-                <p className="task-stepper__label">
-                  {stage.label}
+                <div className="task-stepper__label-row">
+                  <p className="task-stepper__label">{stage.label}</p>
                   {!task.rejectedAt && (
                     <button
                       type="button"
@@ -200,7 +200,7 @@ function TaskDetailStepper({
                       Изменить
                     </button>
                   )}
-                </p>
+                </div>
               )}
 
               {index > 0 && assignee && (

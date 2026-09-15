@@ -52,7 +52,10 @@ export function PremiereCountdownCard({
   }, [target]);
 
   return (
-    <Link href={`/productions/${productionId}`} className="card premiere-countdown">
+    <Link
+      href={`/productions/${productionId}`}
+      className={`card premiere-countdown${label === 'Ближайшая премьера' ? ' premiere-countdown--with-photo' : ''}`}
+    >
       <div className="premiere-countdown__header">
         <span className="premiere-countdown__icon" aria-hidden="true">
           <TimerIcon />

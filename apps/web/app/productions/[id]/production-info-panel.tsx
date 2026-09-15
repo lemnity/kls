@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { ChevronDownIcon, LayersIcon } from '../../icons.js';
+import { ArrowLeftIcon, EditIcon, LayersIcon } from '../../icons.js';
 import { useEscapeToClose } from '../../lib/use-escape-to-close.js';
 import {
   formatDateOnly,
@@ -73,7 +73,7 @@ export function ProductionInfoPanel({
   }
 
   return (
-    <article className={`card${collapsed ? ' production-info-panel--collapsed' : ''}`}>
+    <article className={`card production-info-panel${collapsed ? ' production-info-panel--collapsed' : ''}`}>
       <div className="table-card__header">
         <div className="donut-card__header-text">
           <span className="stat-card__icon">
@@ -82,19 +82,25 @@ export function ProductionInfoPanel({
           <h2>Сведения</h2>
         </div>
         <div className="table-card__header-actions">
-          <button type="button" className="details-link" onClick={openEdit}>
-            Редактировать
+          <button
+            type="button"
+            className="icon-btn icon-btn--flat production-info-panel__edit-toggle"
+            onClick={openEdit}
+            aria-label="Редактировать"
+            title="Редактировать"
+          >
+            <EditIcon />
           </button>
           <button
             type="button"
-            className="icon-btn icon-btn--ghost production-info-panel__collapse-toggle"
+            className="icon-btn production-info-panel__collapse-toggle"
             aria-expanded={!collapsed}
             aria-controls="production-info-panel-body"
             aria-label={collapsed ? 'Развернуть сведения' : 'Свернуть сведения'}
             title={collapsed ? 'Развернуть сведения' : 'Свернуть сведения'}
             onClick={() => setCollapsed((current) => !current)}
           >
-            <ChevronDownIcon className={collapsed ? 'production-info-panel__collapse-icon--collapsed' : ''} />
+            <ArrowLeftIcon className={collapsed ? 'production-info-panel__collapse-icon--collapsed' : ''} />
           </button>
         </div>
       </div>

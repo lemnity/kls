@@ -369,6 +369,22 @@ input:focus-visible,
   transform: none;
 }
 
+/* A true flat icon button — no resting background/shadow at all, just the
+   glyph. Only picks up a soft circle on hover, so it stays visually quiet
+   next to a bolder sibling control (e.g. "Редактировать" beside the
+   accent-filled collapse toggle) while still reading as clickable. */
+.icon-btn--flat {
+  background: none;
+  box-shadow: none;
+  color: var(--color-text-soft);
+}
+
+.icon-btn--flat:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  transform: none;
+}
+
 /* Accent "view more"-style text link, used in card headers. */
 .view-more {
   display: inline-flex;
@@ -954,6 +970,16 @@ input:focus-visible,
   transition: transform var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
 }
 
+/* Nearest-premiere spotlight gets a production photo behind the dark scrim —
+   the scrim is darkest on the left (where the text stack sits) and lightens
+   toward the right, so the photo shows through more there. */
+.premiere-countdown--with-photo {
+  background-image: linear-gradient(100deg, rgba(23, 19, 65, 0.92) 0%, rgba(23, 19, 65, 0.45) 70%),
+    url('https://tdt.kto72.ru/upload/krp/635x383/ce4556eb395bff8ca424d9a978b9423d.JPG');
+  background-size: cover;
+  background-position: center;
+}
+
 a.premiere-countdown:hover {
   transform: translateY(-2px);
   box-shadow: 0 26px 50px -28px rgba(23, 19, 65, 0.5), 0 4px 14px -4px rgba(23, 19, 65, 0.2);
@@ -1495,7 +1521,7 @@ a.premiere-countdown:hover {
 
 .table-card__header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
@@ -1509,7 +1535,7 @@ a.premiere-countdown:hover {
 .table-card__header-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -1517,18 +1543,26 @@ a.premiere-countdown:hover {
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
+/* Left arrow at rest ("collapse this panel leftward"), flipped to point
+   right once collapsed ("expand it back out") — a left/right arrow reads
+   more accurately than an up/down chevron for a toggle that changes the
+   panel's WIDTH, not whether content unfolds below it. */
 .production-info-panel__collapse-icon--collapsed {
-  transform: rotate(-90deg);
+  transform: rotate(180deg);
 }
 
 /* .detail-grid has align-items: stretch so this card normally matches its
-   sibling's (taller) height. When collapsed there's no content left to
-   fill that height with — opt out of stretching so the whole card shrinks
-   down to just its header instead of leaving empty white space below it.
-   The grid track itself is narrowed by .detail-grid:has(...) above; here
+   sibling's (taller) height — right for a card full of rows, but this one
+   has a handful of short label/value pairs, so stretching it left a large
+   dead white area below the content whether or not it was collapsed.
+   Always opt out of stretching: the card sizes to its own content. */
+.production-info-panel {
+  align-self: start;
+}
+
+/* The grid track itself is narrowed by .detail-grid:has(...) below; here
    we restack the header to fit that 72px strip and drop what doesn't. */
 .production-info-panel--collapsed {
-  align-self: start;
   padding: 14px 8px;
 }
 
@@ -1540,7 +1574,7 @@ a.premiere-countdown:hover {
 }
 
 .production-info-panel--collapsed .donut-card__header-text h2,
-.production-info-panel--collapsed .details-link {
+.production-info-panel--collapsed .production-info-panel__edit-toggle {
   display: none;
 }
 
@@ -2885,6 +2919,19 @@ a.premiere-countdown:hover {
   color: var(--color-accent);
 }
 
+/* Label + "Изменить" on a fixed grid row instead of flowing inline after
+   the label text — inline placement put the button at a different x
+   position on every step depending on how long that step's label was
+   ("Новая" vs "тестинг"), which read as unaligned/accidental rather than
+   a deliberate row. justify-content: space-between pins the button to a
+   consistent right edge across every step regardless of label length. */
+.task-stepper__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .task-stepper__label {
   font: 800 0.95rem/1.3 var(--font-sans);
   color: var(--color-text);
@@ -2894,13 +2941,13 @@ a.premiere-countdown:hover {
   color: var(--color-text-soft);
 }
 
-/* Small "Изменить" text trigger next to a stage's own label, opening
-   EditStageForm inline — reuses the app's existing understated
-   .details-link look (see ProductionInfoPanel's "Редактировать"). */
+/* "Изменить" text trigger, opening EditStageForm inline — reuses the
+   app's existing understated .details-link look (see ProductionInfoPanel's
+   "Редактировать"). Sits in .task-stepper__label-row now, not inline
+   after the label text. */
 .task-stepper__edit-trigger {
-  margin-left: 8px;
+  flex-shrink: 0;
   font: 700 0.72rem/1 var(--font-sans);
-  vertical-align: middle;
 }
 
 .task-stepper__rejected-note {
@@ -3591,6 +3638,15 @@ a.premiere-countdown:hover {
   align-items: center;
   flex-wrap: wrap;
   gap: 2px 4px;
+}
+
+/* In the task-detail stepper specifically, the decision row sits alone in
+   its own step's full-width content column — centering it there reads as
+   a deliberate action bar. (Scoped to the stepper only: the same shared
+   row also appears inline in TaskBoard's list rows, where it should stay
+   left-flowing next to the assign/reschedule controls.) */
+.task-stepper__content .budget-graph__task-actions {
+  justify-content: center;
 }
 
 /* Round icon + coloured label — the "signature line" decision control
